@@ -26,6 +26,10 @@ require 'config.php';
         .btn-add-main:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,212,255,0.4); }
         .btn-update { background: var(--success); color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; transition: 0.2s; }
         .btn-update:hover { opacity: 0.8; }
+        .btn-decrease { background: var(--danger); color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; transition: 0.2s; margin-right: 5px; }
+        .btn-decrease:hover { opacity: 0.8; }
+        .btn-edit { background: #f1c40f; color: black; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; transition: 0.2s; margin-left: 5px; font-weight: bold; }
+        .btn-edit:hover { opacity: 0.8; }
 
         /* Table Styles */
         .card { background: var(--card); padding: 25px; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); margin-bottom: 30px; border: 1px solid #252a3a; }
@@ -37,7 +41,7 @@ require 'config.php';
         .stock-input { background: #0f111a; border: 1px solid #333; color: white; padding: 8px; width: 70px; border-radius: 6px; text-align: center; margin-right: 5px; outline: none; }
         .stock-input:focus { border-color: var(--primary); }
         .low-stock { color: var(--danger); font-weight: bold; position: relative; }
-        .low-stock::after { content: '⚠️ Low'; font-size: 10px; margin-left: 5px; vertical-align: middle; }
+        .low-stock::after { content: ''; font-size: 10px; margin-left: 5px; vertical-align: middle; }
 
         /* Modal Styles */
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
@@ -52,15 +56,22 @@ require 'config.php';
         .btn-cancel { background: #333; color: white; border: none; padding: 12px 25px; border-radius: 8px; cursor: pointer; }
     </style>
     <script>
-        async function updateStock(productId) {
+        async function updateStock(productId, actionType = 'add') {
             const qtyInput = document.getElementById('qty-' + productId);
-            const addQty = parseInt(qtyInput.value);
-            if (isNaN(addQty) || addQty === 0) return;
+            let qty = parseInt(qtyInput.value);
+            if (isNaN(qty) || qty === 0) return;
+
+            // ตรวจสอบว่ากดปุ่ม ลด หรือ เพิ่ม
+            if (actionType === 'decrease') {
+                qty = -Math.abs(qty); // แปลงค่าเป็นลบเพื่อนำไปหักสต็อก
+            } else {
+                qty = Math.abs(qty); // บังคับให้เป็นบวก
+            }
 
             const formData = new FormData();
             formData.append('action', 'update_stock');
             formData.append('product_id', productId);
-            formData.append('quantity', addQty);
+            formData.append('quantity', qty);
 
             try {
                 const response = await fetch('pos_action.php', { method: 'POST', body: formData });
@@ -73,6 +84,28 @@ require 'config.php';
                 }
             } catch (e) {
                 console.error(e);
+            }
+        }
+
+        async function deleteProduct(productId) {
+            if (!confirm('⚠️ ยืนยันการลบสินค้านี้ออกจากระบบอย่างถาวรหรือไม่?')) return;
+            
+            const formData = new FormData();
+            formData.append('action', 'delete_product');
+            formData.append('product_id', productId);
+
+            try {
+                const response = await fetch('pos_action.php', { method: 'POST', body: formData });
+                const result = await response.json();
+                if (result.success) {
+                    alert('🗑️ ลบสินค้าเรียบร้อยแล้ว');
+                    location.reload();
+                } else {
+                    alert('เกิดข้อผิดพลาด: ' + (result.error || ''));
+                }
+            } catch (e) {
+                console.error(e);
+                alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
             }
         }
 
@@ -97,6 +130,43 @@ require 'config.php';
                     location.reload();
                 } else {
                     alert('เกิดข้อผิดพลาดในการบันทึกข้อมูล');
+                }
+            } catch (e) {
+                console.error(e);
+                alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+            }
+        }
+
+        function openEditModal(product) {
+            document.getElementById('edit_id').value = product.id;
+            document.getElementById('edit_name').value = product.name;
+            document.getElementById('edit_category').value = product.category;
+            document.getElementById('edit_price').value = product.price;
+            document.getElementById('edit_stock_qty').value = product.stock_qty;
+            document.getElementById('edit_open_ml').value = product.open_ml || 0;
+            document.getElementById('edit_ml_per_unit').value = product.ml_per_unit;
+            document.getElementById('edit_inventory_id').value = product.inventory_id || '';
+            
+            document.getElementById('editModal').style.display = 'flex';
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').style.display = 'none';
+        }
+
+        async function submitEditProduct() {
+            const form = document.getElementById('editProductForm');
+            const formData = new FormData(form);
+            formData.append('action', 'edit_product');
+
+            try {
+                const response = await fetch('pos_action.php', { method: 'POST', body: formData });
+                const result = await response.json();
+                if (result.success) {
+                    alert('แก้ไขสินค้าสำเร็จ');
+                    location.reload();
+                } else {
+                    alert('เกิดข้อผิดพลาด: ' + (result.error || ''));
                 }
             } catch (e) {
                 console.error(e);
@@ -133,6 +203,7 @@ require 'config.php';
                     <th>หมวดหมู่</th>
                     <th>ชื่อสินค้า</th>
                     <th style="text-align: center;">คงเหลือ (Units/ml)</th>
+                    <th style="text-align: center;">ขวดเปิดใช้งาน (ml)</th>
                     <th style="text-align: center;">ปริมาณ/ชิ้น</th>
                     <th style="text-align: center;">เติมสต็อก</th>
                 </tr>
@@ -150,14 +221,24 @@ require 'config.php';
                         $stockClass = ($row['stock_qty'] <= 500 && $row['ml_per_unit'] > 0) ? 'low-stock' : (($row['stock_qty'] <= 5) ? 'low-stock' : '');
                         $displayName = $row['name'] . ($row['parent_name'] ? " <br><small style='color:#777'>(ตัดสต็อกจาก: {$row['parent_name']})</small>" : "");
                         
+                        // เพิ่มข้อความในช่อง Input เพื่อเตือนพนักงานให้ใส่หน่วยที่ถูกต้อง
+                        $placeholder = "จำนวน";
+                        if ($row['inventory_id'] === null && $row['category'] !== 'Food') {
+                            $placeholder = "ขวด/ชิ้น หรือ ml";
+                        }
+                        $safeRowData = htmlspecialchars(json_encode($row), ENT_QUOTES, 'UTF-8');
+
                         echo "<tr>";
                         echo "<td><small>" . htmlspecialchars($row['category']) . "</small></td>";
                         echo "<td>" . $displayName . "</td>";
                         echo "<td style='text-align: center;' class='$stockClass'>" . number_format($row['stock_qty']) . "</td>";
+                        echo "<td style='text-align: center; color:#f1c40f; font-weight:bold;'>" . ($row['open_ml'] > 0 ? number_format($row['open_ml']) . " ml" : "-") . "</td>";
                         echo "<td style='text-align: center; color:#00d4ff;'>" . ($row['ml_per_unit'] > 0 ? $row['ml_per_unit'] . " ml" : "-") . "</td>";
-                        echo "<td style='text-align: center;'>
-                                <input type='number' id='qty-{$row['id']}' class='stock-input' value='0'>
-                                <button onclick='updateStock({$row['id']})' class='btn-update'>เพิ่ม</button>
+                        echo "<td style='text-align: center; white-space: nowrap;'>
+                                <input type='number' id='qty-{$row['id']}' class='stock-input' placeholder='$placeholder' value='0' min='0'>
+                                <button onclick='deleteProduct({$row['id']})' class='btn-decrease' title='ลบสินค้านี้ออกจากระบบ'>ลบทิ้ง</button>
+                                <button onclick='updateStock({$row['id']}, \"add\")' class='btn-update'>เพิ่ม</button>
+                                <button onclick='openEditModal({$safeRowData})' class='btn-edit'>แก้ไข</button>
                               </td>";
                         echo "</tr>";
                     }
@@ -211,13 +292,20 @@ require 'config.php';
                     </div>
                     <div class="input-group">
                         <label>หมวดหมู่:</label>
-                        <select name="category">
-                            <option value="Liquor">Liquor</option>
-                            <option value="Wine">Wine</option>
-                            <option value="Beer">Beer</option>
-                            <option value="Cocktail">Cocktail</option>
-                            <option value="Food">Food</option>
-                        </select>
+                        <input type="text" name="category" list="cat_list" required placeholder="เลือกหรือพิมพ์เพิ่มหมวดหมู่ใหม่...">
+                        <datalist id="cat_list">
+                            <option value="Liquor">
+                            <option value="Wine">
+                            <option value="Beer">
+                            <option value="Cocktail">
+                            <option value="Food">
+                            <?php
+                            $cat_res = $conn->query("SELECT DISTINCT category FROM products WHERE category NOT IN ('Beer','Wine','Cocktail','Food','Liquor') AND category IS NOT NULL AND category != ''");
+                            if($cat_res) {
+                                while($c = $cat_res->fetch_assoc()) echo "<option value='".htmlspecialchars($c['category'])."'>\n";
+                            }
+                            ?>
+                        </datalist>
                     </div>
                     <div class="input-group">
                         <label>ราคาขาย (฿):</label>
@@ -245,6 +333,54 @@ require 'config.php';
                 <div class="modal-footer">
                     <button class="btn-cancel" onclick="closeAddModal()">ยกเลิก</button>
                     <button class="btn-save" onclick="submitNewProduct()">บันทึกสินค้า</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal สำหรับแก้ไขสินค้า -->
+        <div id="editModal" class="modal-overlay">
+            <div class="modal-box">
+                <h2 style="color: #f1c40f;">✏️ แก้ไขข้อมูลสต็อกสินค้า</h2>
+                <form id="editProductForm">
+                    <input type="hidden" name="id" id="edit_id">
+                    <div class="input-group">
+                        <label>ชื่อสินค้า:</label>
+                        <input type="text" name="name" id="edit_name" required>
+                    </div>
+                    <div class="input-group">
+                        <label>หมวดหมู่:</label>
+                        <input type="text" name="category" id="edit_category" list="cat_list" required placeholder="เลือกหรือพิมพ์เพิ่มหมวดหมู่ใหม่...">
+                    </div>
+                    <div class="input-group">
+                        <label>ราคาขาย (฿):</label>
+                        <input type="number" name="price" id="edit_price" step="0.01" required>
+                    </div>
+                    <div class="input-group">
+                        <label>แก้ไขยอดคงเหลือ (อัปเดตทับยอดเดิม):</label>
+                        <input type="number" name="stock_qty" id="edit_stock_qty">
+                    </div>
+                    <div class="input-group">
+                        <label>แก้ไขปริมาณขวดที่เปิดใช้งานแล้ว (ml):</label>
+                        <input type="number" name="open_ml" id="edit_open_ml">
+                    </div>
+                    <div class="input-group">
+                        <label>ปริมาณต่อหน่วย (ถ้าตัดเป็น ml):</label>
+                        <input type="number" name="ml_per_unit" id="edit_ml_per_unit">
+                    </div>
+                    <div class="input-group">
+                        <label>เชื่อมสต็อกกับสินค้าหลัก (ถ้ามี):</label>
+                        <select name="inventory_id" id="edit_inventory_id">
+                            <option value="">-- เป็นสินค้าหลักเอง --</option>
+                            <?php
+                            $p_res = $conn->query("SELECT id, name FROM products WHERE inventory_id IS NULL ORDER BY name ASC");
+                            while($p = $p_res->fetch_assoc()) echo "<option value='{$p['id']}'>{$p['name']}</option>";
+                            ?>
+                        </select>
+                    </div>
+                </form>
+                <div class="modal-footer">
+                    <button class="btn-cancel" onclick="closeEditModal()">ยกเลิก</button>
+                    <button class="btn-save" style="background: #f1c40f; color: black;" onclick="submitEditProduct()">บันทึกการแก้ไข</button>
                 </div>
             </div>
         </div>

@@ -1,3 +1,6 @@
+<?php
+require 'config.php';
+?>
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -16,6 +19,12 @@
         applySC: true,
         discount: 0,
         isPercent: true
+    };
+
+    let lineDiscState = {
+        name: '',
+        price: 0,
+        type: 'amount' // 'amount' หรือ 'percent'
     };
 
     let currentOrderId = null; 
@@ -104,7 +113,13 @@
         document.getElementById('productModal').style.display = 'flex';
         updateVariationInputs(); // รีเซ็ตช่องกรอกราคาเมื่อเปิด
     }
-    function closeProductModal() { document.getElementById('productModal').style.display = 'none'; }
+    function closeProductModal() { 
+        document.getElementById('productModal').style.display = 'none'; 
+        document.getElementById('newName').value = '';
+        document.getElementById('newMl').value = '';
+        document.getElementById('newInventoryId').value = '';
+        document.getElementById('newCategory').value = '';
+    }
 
     // ฟังก์ชันเปลี่ยนช่องกรอกราคาตามหมวดหมู่
     function updateVariationInputs() {
@@ -137,6 +152,8 @@
         const name = document.getElementById('newName').value;
         const category = document.getElementById('newCategory').value;
         const priceInputs = document.querySelectorAll('.v-price');
+        const ml = document.getElementById('newMl').value;
+        const inventoryId = document.getElementById('newInventoryId').value;
 
         if (!name) { alert("กรุณาระบุชื่อเมนู"); return; }
 
@@ -153,6 +170,8 @@
                 formData.append('name', fullName);
                 formData.append('price', price);
                 formData.append('category', category);
+                formData.append('ml_per_unit', ml);
+                formData.append('inventory_id', inventoryId);
 
                 try {
                     const response = await fetch('pos_action.php', { method: 'POST', body: formData });
@@ -178,20 +197,25 @@
         let subtotal = 0;
 
         currentOrder.items.forEach((item, index) => {
-            subtotal += item.price * item.quantity;
+            let itemDisc = item.item_discount || 0;
+            let discountedPrice = item.price - itemDisc;
+            subtotal += discountedPrice * item.quantity;
+
             itemContainer.innerHTML += `
                 <div class="order-item-row" style="display:flex; align-items:center; justify-content:space-between; padding: 12px 0; border-bottom: 1px solid #252a3a;">
                     <div style="flex:1; display:flex; flex-direction:column;">
-                        <span class="item-name" style="font-size:14px; margin-bottom:5px;">${item.name}</span>
+                        <span class="item-name" style="font-size:14px; margin-bottom:5px;">${item.name} ${itemDisc > 0 ? `<small style="color:#ff4d4d;">(ลด -฿${itemDisc})</small>` : ''}</span>
                         <div style="display:flex; align-items:center; gap:12px;">
                             <button onclick="removeFromOrder('${item.name.replace(/'/g, "\\'")}')" 
                                 style="background:#e74c3c; color:white; border:none; border-radius:4px; width:28px; height:28px; cursor:pointer; font-weight:bold;">-</button>
                             <b style="color:#00d4ff; min-width:20px; text-align:center;">${item.quantity}</b>
                             <button onclick="addToOrder('${item.name.replace(/'/g, "\\'")}', ${item.price})" 
                                 style="background:#2ecc71; color:white; border:none; border-radius:4px; width:28px; height:28px; cursor:pointer; font-weight:bold;">+</button>
+                            <button onclick="promptItemDiscount('${item.name.replace(/'/g, "\\'")}', ${item.price}, ${itemDisc})" 
+                                style="background:#f1c40f; color:black; border:none; border-radius:4px; padding:2px 8px; cursor:pointer; font-size:11px; font-weight:bold;">💸 ส่วนลด</button>
                         </div>
                     </div>
-                    <span class="item-price">฿${(item.price * item.quantity).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                    <span class="item-price">฿${(discountedPrice * item.quantity).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                 </div>`;
         });
 
@@ -290,32 +314,41 @@
         }
     }
 
-    async function addToOrder(name, price) {
+    async function addToOrder(name, price, confirmOpen = 0) {
         if (!currentOrderId) { openTableModal(); return; }
 
-        // 1. อัปเดต UI ทันทีเพื่อให้รู้ว่ากดติดแล้ว
-        const existingItem = currentOrder.items.find(item => item.name === name);
-        if (existingItem) {
-            existingItem.quantity += 1;
-        } else {
-            currentOrder.items.push({ name: name, price: parseFloat(price || 0), quantity: 1 });
-        }
-        updateDisplay();
-
-        // 2. บันทึกลงฐานข้อมูลทันทีเพื่อให้ข้อมูลไม่หายเมื่อ Refresh
         const formData = new FormData();
         formData.append('action', 'add_item');
         formData.append('order_id', currentOrderId);
         formData.append('item_name', name);
         formData.append('price', price);
+        if (confirmOpen) formData.append('confirm_open', '1');
 
         try {
             const response = await fetch('pos_action.php', { method: 'POST', body: formData });
             const result = await response.json();
+            
+            // ถ้าระบบแจ้งว่าขวดเปิดมี ml ไม่พอ ให้ถามพนักงานเพื่อเปิดขวดใหม่
+            if (result.require_open) {
+                if (confirm(result.message)) {
+                    await addToOrder(name, price, 1); // กดยืนยัน ให้ส่งคำสั่งไปอีกครั้งพร้อม flag เปิดขวด
+                }
+                return; // หยุดการทำงานชั่วคราว รอจนกว่าจะเปิดขวด
+            }
+
             if (!result.success) {
                 alert(result.message);
-                location.reload(); // รีโหลดเพื่ออัปเดตสต็อกล่าสุด
+                return;
             }
+
+            // เมื่อบันทึกลง Database สำเร็จแล้ว ค่อยนำมาแสดงบนหน้าจอ
+            const existingItem = currentOrder.items.find(item => item.name === name);
+            if (existingItem) {
+                existingItem.quantity += 1;
+            } else {
+                currentOrder.items.push({ name: name, price: parseFloat(price || 0), quantity: 1 });
+            }
+            updateDisplay();
         } catch (e) { 
             console.error("Failed to save item:", e); 
         }
@@ -404,6 +437,57 @@
         closeSpecialModal();
     }
 
+    function promptItemDiscount(name, price, currentDisc) {
+        if (!currentOrderId) return;
+        lineDiscState.name = name;
+        lineDiscState.price = price;
+        lineDiscState.type = 'amount'; // เริ่มต้นที่แบบบาท
+        
+        document.getElementById('lineDiscountValue').value = currentDisc;
+        document.getElementById('discount-item-name-display').innerText = name + " (ราคา ฿" + price.toLocaleString() + ")";
+        document.getElementById('lineItemDiscountModal').style.display = 'flex';
+        updateLineDiscUI();
+    }
+
+    function setLineDiscType(type) {
+        lineDiscState.type = type;
+        updateLineDiscUI();
+    }
+
+    function updateLineDiscUI() {
+        updateButtonState('btn-line-type-amount', lineDiscState.type === 'amount');
+        updateButtonState('btn-line-type-percent', lineDiscState.type === 'percent');
+    }
+
+    function closeLineDiscModal() {
+        document.getElementById('lineItemDiscountModal').style.display = 'none';
+    }
+
+    async function applyLineItemDiscount() {
+        let val = parseFloat(document.getElementById('lineDiscountValue').value) || 0;
+        let finalDiscountAmount = val;
+
+        // ถ้าเลือกเป็น % ให้คำนวณเป็นยอดเงินบาทก่อนส่งไปบันทึก
+        if (lineDiscState.type === 'percent') {
+            finalDiscountAmount = (lineDiscState.price * val) / 100;
+        }
+
+        const formData = new FormData();
+        formData.append('action', 'update_item_discount');
+        formData.append('order_id', currentOrderId);
+        formData.append('item_name', lineDiscState.name);
+        formData.append('discount', finalDiscountAmount);
+
+        try {
+            const response = await fetch('pos_action.php', { method: 'POST', body: formData });
+            const result = await response.json();
+            if (result.success) {
+                closeLineDiscModal();
+                switchOrder(currentOrderId);
+            }
+        } catch (e) { console.error("Item discount error:", e); }
+    }
+
     async function voidAll(orderId) { 
         if(!confirm('ยืนยันการยกเลิกบิล?')) return;
         
@@ -427,7 +511,7 @@
         if (!confirm('ยืนยันการชำระเงินและปิดบิลนี้?')) return;
 
         // คำนวณยอดรวมสุดท้ายจากหน้าจอ
-        let subtotal = currentOrder.items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+        let subtotal = currentOrder.items.reduce((acc, item) => acc + ((item.price - (item.item_discount || 0)) * item.quantity), 0);
         let sc = currentOrder.applySC ? (subtotal * 0.10) : 0;
         let tax = currentOrder.applyTax ? ((subtotal + sc) * 0.07) : 0;
         let discountVal = parseFloat(currentOrder.discount || 0);
@@ -555,7 +639,12 @@
         currentOrder.applySC = data.order_info ? (parseInt(data.order_info.apply_sc) === 1) : true;
         currentOrder.discount = data.order_info ? parseFloat(data.order_info.discount_amount || 0) : 0;
         currentOrder.isPercent = data.order_info ? (parseInt(data.order_info.is_percent) === 1) : true;
-        currentOrder.items = data.items ? data.items.map(i => ({...i, price: parseFloat(i.price), quantity: parseInt(i.quantity)})) : [];
+        currentOrder.items = data.items ? data.items.map(i => ({
+            ...i, 
+            price: parseFloat(i.price), 
+            quantity: parseInt(i.quantity),
+            item_discount: parseFloat(i.item_discount || 0)
+        })) : [];
         updateDisplay();
         loadActiveOrders(); // อัปเดตสีปุ่มบิลที่เลือก
     }
@@ -591,11 +680,22 @@
     <!-- ส่วนแสดงหมวดหมู่ -->
     <div class="categories">
         <button onclick="openProductModal()" style="background:#2ecc71; color:white; font-weight:bold; border-radius:8px;">➕ เพิ่มเมนูใหม่</button>
-        <button onclick="loadProducts('Beer')">🍺 Beer</button>
-        <button onclick="loadProducts('Wine')">🍷 Wine</button>
-        <button onclick="loadProducts('Cocktail')">🍸 Cocktail</button>
-        <button onclick="loadProducts('Food')">🍽️ Food</button>
-        <button onclick="loadProducts('Liquor')">🥃 Liquor</button>
+        
+        <?php
+        // ดึงหมวดหมู่ทั้งหมดที่มีในระบบมาสร้างเป็นปุ่มโดยอัตโนมัติ
+        $cat_icons = ['Beer' => '🍺', 'Wine' => '🍷', 'Cocktail' => '🍸', 'Food' => '🍽️', 'Liquor' => '🥃'];
+        $cat_res = $conn->query("SELECT DISTINCT category FROM products WHERE category IS NOT NULL AND category != '' ORDER BY category ASC");
+        if ($cat_res && $cat_res->num_rows > 0) {
+            while($c = $cat_res->fetch_assoc()) {
+                $catName = htmlspecialchars($c['category']);
+                $icon = isset($cat_icons[$catName]) ? $cat_icons[$catName] : '📂';
+                echo "<button onclick=\"loadProducts('$catName')\">$icon $catName</button>\n";
+            }
+        } else {
+            echo '<button onclick="loadProducts(\'Beer\')">🍺 Beer</button>';
+        }
+        ?>
+        
         <button onclick="openSpecialModal()" style="background:#ff9800; color:white; font-weight:bold; border-radius:8px;">✨ Special Menu</button>
         
         <!-- พื้นที่แสดงปุ่มสินค้าที่ดึงมาจาก DB -->
@@ -670,6 +770,30 @@
         <div class="modal-footer">
             <button onclick="document.getElementById('tableSelectionModal').style.display='none'" class="btn-cancel">ยกเลิก</button>
             <button onclick="confirmTable()" class="btn-save" style="background:#00d4ff; color:black;">เปิดโต๊ะ</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal สำหรับส่วนลดรายรายการ -->
+<div id="lineItemDiscountModal" class="modal-overlay">
+    <div class="modal-box" style="border-color: #f1c40f;">
+        <div class="modal-header">
+            <h3 style="color: #f1c40f;">💸 ส่วนลดรายการสินค้า</h3>
+            <p id="discount-item-name-display" style="color: #aaa; font-size: 14px; margin-bottom: 15px;"></p>
+        </div>
+        <div class="modal-body">
+            <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                <button onclick="setLineDiscType('amount')" id="btn-line-type-amount" style="flex:1; padding:12px; border-radius:8px; border:none; cursor:pointer; font-weight:bold;">฿ บาท</button>
+                <button onclick="setLineDiscType('percent')" id="btn-line-type-percent" style="flex:1; padding:12px; border-radius:8px; border:none; cursor:pointer; font-weight:bold;">% เปอร์เซ็นต์</button>
+            </div>
+            <div class="input-group">
+                <label style="color: #888;">ระบุจำนวนส่วนลด:</label>
+                <input type="number" id="lineDiscountValue" placeholder="0.00" step="0.01" style="font-size: 24px; text-align: center; padding: 15px;">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button onclick="closeLineDiscModal()" class="btn-cancel">ยกเลิก</button>
+            <button onclick="applyLineItemDiscount()" class="btn-save" style="background:#f1c40f; color: black;">ตกลง</button>
         </div>
     </div>
 </div>
@@ -778,12 +902,36 @@
             </div>
             <div class="input-group">
                 <label>หมวดหมู่:</label>
-                <select id="newCategory" onchange="updateVariationInputs()" style="width: 100%; padding: 12px; background: #0f111a; border: 1px solid #333; border-radius: 8px; color: white;">
-                    <option value="Beer">🍺 Beer</option>
-                    <option value="Wine">🍷 Wine</option>
-                    <option value="Cocktail">🍸 Cocktail</option>
-                    <option value="Food">🍽️ Food</option>
-                    <option value="Liquor">🥃 Liquor</option>
+                <input type="text" id="newCategory" list="cat_list_pos" oninput="updateVariationInputs()" placeholder="เลือกหรือพิมพ์เพิ่มหมวดหมู่ใหม่..." style="width: 100%; padding: 12px; background: #0f111a; border: 1px solid #333; border-radius: 8px; color: white;">
+                <datalist id="cat_list_pos">
+                    <option value="Beer">
+                    <option value="Wine">
+                    <option value="Cocktail">
+                    <option value="Food">
+                    <option value="Liquor">
+                    <?php
+                    // ดึงหมวดหมู่ที่ผู้ใช้เคยสร้างไว้มาเป็นตัวเลือกอัตโนมัติ
+                    $cat_res = $conn->query("SELECT DISTINCT category FROM products WHERE category NOT IN ('Beer','Wine','Cocktail','Food','Liquor') AND category IS NOT NULL AND category != ''");
+                    if($cat_res) {
+                        while($c = $cat_res->fetch_assoc()) {
+                            echo "<option value='".htmlspecialchars($c['category'])."'>\n";
+                        }
+                    }
+                    ?>
+                </datalist>
+            </div>
+            <div class="input-group">
+                <label>ปริมาณต่อหน่วย (ml):</label>
+                <input type="number" id="newMl" placeholder="เช่น 30 (Shot) หรือ 750 (ขวด)">
+            </div>
+            <div class="input-group">
+                <label>เชื่อมสต็อกกับสินค้าหลัก (ถ้ามี):</label>
+                <select id="newInventoryId" style="width: 100%; padding: 12px; background: #0f111a; border: 1px solid #333; border-radius: 8px; color: white;">
+                    <option value="">-- เป็นสินค้าหลักเอง --</option>
+                    <?php
+                    $p_res = $conn->query("SELECT id, name FROM products WHERE inventory_id IS NULL ORDER BY name ASC");
+                    while($p = $p_res->fetch_assoc()) echo "<option value='{$p['id']}'>".htmlspecialchars($p['name'])."</option>";
+                    ?>
                 </select>
             </div>
             <div id="variation-inputs" style="margin-top:15px;">

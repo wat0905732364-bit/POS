@@ -18,7 +18,7 @@ if (!$order) {
 // die();
 // ---------------------------------------------------
 // ดึงรายการอาหาร
-$stmt_items = $conn->prepare("SELECT item_name, price, SUM(quantity) as quantity FROM order_items WHERE order_id = ? AND status = 'active' GROUP BY item_name, price");
+$stmt_items = $conn->prepare("SELECT item_name, price, item_discount, SUM(quantity) as quantity FROM order_items WHERE order_id = ? AND status = 'active' GROUP BY item_name, price, item_discount");
 $stmt_items->bind_param("i", $order_id);
 $stmt_items->execute();
 $items_result = $stmt_items->get_result();
@@ -26,7 +26,8 @@ $items_result = $stmt_items->get_result();
 $subtotal = 0;
 $items_list = [];
 while($item = $items_result->fetch_assoc()) {
-    $subtotal += $item['price'] * $item['quantity'];
+    $price_after_disc = $item['price'] - ($item['item_discount'] ?? 0);
+    $subtotal += $price_after_disc * $item['quantity'];
     $items_list[] = $item;
 }
 
@@ -98,8 +99,13 @@ $total = max(0, ($subtotal + $sc + $tax) - $discount);
                 <?php foreach($items_list as $item): ?>
                 <tr>
                     <td><?php echo $item['quantity']; ?></td>
-                    <td><?php echo htmlspecialchars($item['item_name']); ?></td>
-                    <td class="text-right"><?php echo number_format($item['price'] * $item['quantity'], 2); ?></td>
+                    <td>
+                        <?php echo htmlspecialchars($item['item_name']); ?>
+                        <?php if(($item['item_discount'] ?? 0) > 0): ?>
+                            <br><small style="font-size: 10px; color: #666;">(Discount -<?php echo number_format($item['item_discount'], 2); ?>)</small>
+                        <?php endif; ?>
+                    </td>
+                    <td class="text-right"><?php echo number_format(($item['price'] - ($item['item_discount'] ?? 0)) * $item['quantity'], 2); ?></td>
                 </tr>
                 <?php endforeach; ?>
             </tbody>

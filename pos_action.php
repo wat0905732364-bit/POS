@@ -10,9 +10,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $item_name = $_POST['item_name'];
         $price = floatval($_POST['price']);
         
-        // ตรวจสอบสต็อกก่อนเพิ่มรายการ (รองรับการเช็คผ่าน inventory_id)
+        // ตรวจสอบสต็อกขวดที่เปิดแล้ว สำหรับรายการที่ต้องตัดเป็น ml
         $check_stmt = $conn->prepare("
-            SELECT p.id, COALESCE(inv.stock_qty, p.stock_qty) as current_stock, p.ml_per_unit 
+            SELECT p.id, p.ml_per_unit as req_ml, p.inventory_id,
+                   inv.id as master_id, inv.stock_qty as master_stock, inv.ml_per_unit as master_cap, inv.open_ml as master_open
             FROM products p 
             LEFT JOIN products inv ON p.inventory_id = inv.id 
             WHERE p.name = ?
@@ -21,11 +22,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $check_stmt->execute();
         $data = $check_stmt->get_result()->fetch_assoc();
         
-        $needed = ($data && $data['ml_per_unit'] > 0) ? $data['ml_per_unit'] : 1;
-
-        if ($data && $data['current_stock'] < $needed) {
-            echo json_encode(['success' => false, 'message' => 'สินค้าหมด (Out of Stock)']);
-            exit;
+        if ($data && $data['inventory_id'] !== null && $data['req_ml'] > 0) {
+            $master_id = $data['master_id'];
+            $needed_ml = $data['req_ml'];
+            $current_open = $data['master_open'];
+            
+            if ($current_open < $needed_ml) {
+                if ($data['master_stock'] > 0) {
+                    // ขวดเปิดมีไม่พอ และมีขวดเต็มในสต็อก -> ถามเพื่อเปิดขวดใหม่
+                    if (!isset($_POST['confirm_open']) || $_POST['confirm_open'] !== '1') {
+                        echo json_encode(['success' => false, 'require_open' => true, 'message' => "ขวดที่กำลังเปิดใช้งานมีปริมาณไม่พอ (เหลือ {$current_open} ml)\n\nต้องการเปิดขวดใหม่หรือไม่?\n(ระบบจะตัดสต็อกขวดเต็ม 1 ขวดมาเทใส่ขวดที่กำลังใช้งาน)"]);
+                        exit;
+                    } else {
+                        // กดยืนยันแล้ว -> ลดขวดเต็ม 1 ขวด และเพิ่มปริมาณ ml เข้าไปในขวดเปิด
+                        $master_cap = $data['master_cap'];
+                        $conn->query("UPDATE products SET stock_qty = stock_qty - 1, open_ml = open_ml + {$master_cap} WHERE id = {$master_id}");
+                        $conn->query("INSERT INTO stock_logs (product_id, qty_change, type) VALUES ({$master_id}, -1, 'sale')"); // บันทึกประวัติเปิดขวด
+                    }
+                }
+            }
         }
 
         $stmt = $conn->prepare("INSERT INTO order_items (order_id, item_name, price, quantity, status) VALUES (?, ?, ?, 1, 'active')");
@@ -41,6 +56,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // ลบรายการล่าสุดที่มีชื่อตรงกันออก 1 แถว (Record)
         $stmt = $conn->prepare("DELETE FROM order_items WHERE order_id = ? AND item_name = ? AND status = 'active' ORDER BY id DESC LIMIT 1");
         $stmt->bind_param("is", $order_id, $item_name);
+        echo json_encode(['success' => $stmt->execute()]);
+        exit;
+    }
+
+    if ($_POST['action'] === 'update_item_discount') {
+        $order_id = intval($_POST['order_id']);
+        $item_name = $_POST['item_name'];
+        $discount = floatval($_POST['discount']);
+        
+        $stmt = $conn->prepare("UPDATE order_items SET item_discount = ? WHERE order_id = ? AND item_name = ? AND status = 'active'");
+        $stmt->bind_param("dis", $discount, $order_id, $item_name);
         echo json_encode(['success' => $stmt->execute()]);
         exit;
     }
@@ -85,6 +111,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         
         $result = addProduct($name, $price, $category, $stock, $ml, $inv_id);
         echo json_encode(['success' => $result]);
+        exit;
+    }
+
+    if ($_POST['action'] === 'edit_product') {
+        $id = intval($_POST['id']);
+        $name = $_POST['name'];
+        $category = $_POST['category'];
+        $price = floatval($_POST['price']);
+        $stock_qty = isset($_POST['stock_qty']) ? intval($_POST['stock_qty']) : 0;
+        $ml_per_unit = isset($_POST['ml_per_unit']) ? intval($_POST['ml_per_unit']) : 0;
+        $open_ml = isset($_POST['open_ml']) ? intval($_POST['open_ml']) : 0;
+        $inv_id = (!empty($_POST['inventory_id'])) ? intval($_POST['inventory_id']) : null;
+        
+        $stmt = $conn->prepare("UPDATE products SET name=?, category=?, price=?, stock_qty=?, ml_per_unit=?, open_ml=?, inventory_id=? WHERE id=?");
+        $stmt->bind_param("ssdiiiii", $name, $category, $price, $stock_qty, $ml_per_unit, $open_ml, $inv_id, $id);
+        
+        $success = $stmt->execute();
+        echo json_encode(['success' => $success, 'error' => $conn->error]);
+        exit;
+    }
+
+    if ($_POST['action'] === 'delete_product') {
+        $id = intval($_POST['product_id']);
+        
+        // 1. ลบประวัติสต็อกของสินค้านี้ออกก่อน
+        $conn->query("DELETE FROM stock_logs WHERE product_id = $id");
+        
+        // 2. ปลดการเชื่อมโยงสินค้าลูกที่ผูกกับสินค้านี้อยู่ (ถ้ามี) เพื่อไม่ให้บัค
+        $conn->query("UPDATE products SET inventory_id = NULL WHERE inventory_id = $id");
+        
+        // 3. ลบสินค้าหลัก
+        $stmt = $conn->prepare("DELETE FROM products WHERE id = ?");
+        $stmt->bind_param("i", $id);
+        $success = $stmt->execute();
+        
+        echo json_encode(['success' => $success, 'error' => $conn->error]);
         exit;
     }
 
@@ -173,10 +235,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $table_data = $stmt_order->get_result()->fetch_assoc();
 
         // 2. ดึงรายการสินค้า
-        $sql_items = "SELECT item_name as name, price, SUM(quantity) as quantity 
+        $sql_items = "SELECT item_name as name, price, item_discount, SUM(quantity) as quantity 
                       FROM order_items 
                       WHERE order_id = ? AND status = 'active' 
-                      GROUP BY item_name, price";
+                      GROUP BY item_name, price, item_discount";
         $stmt_items = $conn->prepare($sql_items);
         $stmt_items->bind_param("i", $order_id);
         $stmt_items->execute();
@@ -215,24 +277,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $items_stmt->execute();
             $items_res = $items_stmt->get_result();
             while ($item = $items_res->fetch_assoc()) {
-                // ค้นหาข้อมูลสินค้าและตัวตัดสต็อก
                 $p_stmt = $conn->prepare("SELECT id, inventory_id, ml_per_unit FROM products WHERE name = ?");
                 $p_stmt->bind_param("s", $item['item_name']);
                 $p_stmt->execute();
                 $p_data = $p_stmt->get_result()->fetch_assoc();
                 
                 if ($p_data) {
-                    $target_id = $p_data['inventory_id'] ?? $p_data['id'];
-                    $ml_to_cut = ($p_data['ml_per_unit'] > 0) ? ($p_data['ml_per_unit'] * $item['sum_qty']) : $item['sum_qty'];
-                    
-                    // ลดสต็อก (จะลดเป็นหน่วยปกติหรือ ml ตามที่ตั้งค่าไว้)
-                    $conn->query("UPDATE products SET stock_qty = stock_qty - $ml_to_cut WHERE id = $target_id");
-                    
-                    // บันทึก Log
-                    $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, type) VALUES (?, ?, 'sale')");
-                    $neg_ml = -$ml_to_cut;
-                    $log_stmt->bind_param("ii", $target_id, $neg_ml);
-                    $log_stmt->execute();
+                    if ($p_data['inventory_id'] !== null && $p_data['ml_per_unit'] > 0) {
+                        // สินค้าลูก (ตัดเป็น ml) ให้ไปตัดจากขวดที่เปิดใช้งานแล้ว (open_ml) เท่านั้น!
+                        $ml_to_cut = $p_data['ml_per_unit'] * $item['sum_qty'];
+                        $target_id = $p_data['inventory_id'];
+                        $conn->query("UPDATE products SET open_ml = open_ml - $ml_to_cut WHERE id = $target_id");
+                    } else {
+                        // สินค้าหลัก หรือ สินค้าที่ขายเป็นขวด/ชิ้นเต็ม ให้ตัดสต็อกปกติ
+                        $qty_to_cut = $item['sum_qty'];
+                        $target_id = ($p_data['inventory_id'] !== null) ? $p_data['inventory_id'] : $p_data['id'];
+                        $conn->query("UPDATE products SET stock_qty = stock_qty - $qty_to_cut WHERE id = $target_id");
+                        
+                        $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, type) VALUES (?, ?, 'sale')");
+                        $neg_qty = -$qty_to_cut;
+                        $log_stmt->bind_param("ii", $target_id, $neg_qty);
+                        $log_stmt->execute();
+                    }
                 }
             }
         }
