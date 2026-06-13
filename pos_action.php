@@ -37,7 +37,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         // กดยืนยันแล้ว -> ลดขวดเต็ม 1 ขวด และเพิ่มปริมาณ ml เข้าไปในขวดเปิด
                         $master_cap = $data['master_cap'];
                         $conn->query("UPDATE products SET stock_qty = stock_qty - 1, open_ml = open_ml + {$master_cap} WHERE id = {$master_id}");
-                        $conn->query("INSERT INTO stock_logs (product_id, qty_change, type) VALUES ({$master_id}, -1, 'sale')"); // บันทึกประวัติเปิดขวด
+                        $conn->query("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES ({$master_id}, -1, 'unit', 'sale')"); // บันทึกประวัติเปิดขวด
                     }
                 }
             }
@@ -108,8 +108,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $stock = isset($_POST['stock_qty']) ? intval($_POST['stock_qty']) : 0;
         $ml = isset($_POST['ml_per_unit']) ? intval($_POST['ml_per_unit']) : 0;
         $inv_id = (!empty($_POST['inventory_id'])) ? intval($_POST['inventory_id']) : null;
+        $show_on_pos = isset($_POST['show_on_pos']) ? intval($_POST['show_on_pos']) : 1;
         
-        $result = addProduct($name, $price, $category, $stock, $ml, $inv_id);
+        $result = addProduct($name, $price, $category, $stock, $ml, $inv_id, $show_on_pos);
         echo json_encode(['success' => $result]);
         exit;
     }
@@ -123,9 +124,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $ml_per_unit = isset($_POST['ml_per_unit']) ? intval($_POST['ml_per_unit']) : 0;
         $open_ml = isset($_POST['open_ml']) ? intval($_POST['open_ml']) : 0;
         $inv_id = (!empty($_POST['inventory_id'])) ? intval($_POST['inventory_id']) : null;
+        $show_on_pos = isset($_POST['show_on_pos']) ? intval($_POST['show_on_pos']) : 1;
         
-        $stmt = $conn->prepare("UPDATE products SET name=?, category=?, price=?, stock_qty=?, ml_per_unit=?, open_ml=?, inventory_id=? WHERE id=?");
-        $stmt->bind_param("ssdiiiii", $name, $category, $price, $stock_qty, $ml_per_unit, $open_ml, $inv_id, $id);
+        $stmt = $conn->prepare("UPDATE products SET name=?, category=?, price=?, stock_qty=?, ml_per_unit=?, open_ml=?, inventory_id=?, show_on_pos=? WHERE id=?");
+        $stmt->bind_param("ssdiiiiii", $name, $category, $price, $stock_qty, $ml_per_unit, $open_ml, $inv_id, $show_on_pos, $id);
         
         $success = $stmt->execute();
         echo json_encode(['success' => $success, 'error' => $conn->error]);
@@ -153,13 +155,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'update_order_settings') {
         $order_id = intval($_POST['order_id']);
         $discount = floatval($_POST['discount']);
+        $promo_amount = isset($_POST['promo_amount']) ? floatval($_POST['promo_amount']) : 0;
         $is_percent = intval($_POST['is_percent']);
         $apply_sc = intval($_POST['apply_sc']);
         $apply_tax = intval($_POST['apply_tax']);
         
-        $sql = "UPDATE orders SET discount_amount = ?, is_percent = ?, apply_sc = ?, apply_tax = ? WHERE id = ?";
+        $sql = "UPDATE orders SET discount_amount = ?, promo_amount = ?, is_percent = ?, apply_sc = ?, apply_tax = ? WHERE id = ?";
         $stmt = $conn->prepare($sql);
-        $stmt->bind_param("diiii", $discount, $is_percent, $apply_sc, $apply_tax, $order_id);
+        $stmt->bind_param("ddiiii", $discount, $promo_amount, $is_percent, $apply_sc, $apply_tax, $order_id);
         echo json_encode(['success' => $stmt->execute()]);
         exit;
     }
@@ -189,7 +192,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // 2. บันทึกประวัติการเติมสต็อก
         if ($success) {
-            $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, type) VALUES (?, ?, 'restock')");
+            $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'unit', 'restock')");
             $log_stmt->bind_param("ii", $product_id, $quantity);
             $log_stmt->execute();
         }
@@ -200,11 +203,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'get_products') {
         $category = $_POST['category'];
-        $sql = "SELECT * FROM products WHERE category = ?";
+        $sql = "SELECT * FROM products WHERE category = ? AND (show_on_pos = 1 OR show_on_pos IS NULL)";
         $stmt = $conn->prepare($sql);
         $stmt->bind_param("s", $category);
         $stmt->execute();
         echo json_encode($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
+        exit;
+    }
+
+    if ($_POST['action'] === 'get_daily_stock_details') {
+        $date = $_POST['date'];
+        $sql = "SELECT p.name, s.qty_change, s.unit, s.type, s.created_at 
+                FROM stock_logs s
+                JOIN products p ON s.product_id = p.id
+                WHERE DATE(s.created_at) = ?
+                ORDER BY s.created_at DESC";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("s", $date);
+        $stmt->execute();
+        
+        $result = $stmt->get_result();
+        echo json_encode($result->fetch_all(MYSQLI_ASSOC));
         exit;
     }
 
@@ -235,16 +254,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $table_data = $stmt_order->get_result()->fetch_assoc();
 
         // 2. ดึงรายการสินค้า
-        $sql_items = "SELECT item_name as name, price, item_discount, SUM(quantity) as quantity 
-                      FROM order_items 
-                      WHERE order_id = ? AND status = 'active' 
-                      GROUP BY item_name, price, item_discount";
+        $sql_items = "SELECT o.item_name as name, o.price, o.item_discount, SUM(o.quantity) as quantity, p.category 
+                      FROM order_items o
+                      LEFT JOIN products p ON o.item_name = p.name
+                      WHERE o.order_id = ? AND o.status = 'active' 
+                      GROUP BY o.item_name, o.price, o.item_discount, p.category";
         $stmt_items = $conn->prepare($sql_items);
         $stmt_items->bind_param("i", $order_id);
         $stmt_items->execute();
         $items = $stmt_items->get_result()->fetch_all(MYSQLI_ASSOC);
 
         echo json_encode(['items' => $items, 'order_info' => $table_data]);
+        exit;
+    }
+
+    if ($_POST['action'] === 'check_member') {
+        $phone = $_POST['phone'];
+        $stmt = $conn->prepare("SELECT id, name, phone, points FROM members WHERE phone = ?");
+        $stmt->bind_param("s", $phone);
+        $stmt->execute();
+        $result = $stmt->get_result()->fetch_assoc();
+        
+        if ($result) {
+            echo json_encode(['success' => true, 'member' => $result]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'ไม่พบข้อมูลสมาชิกเบอร์นี้']);
+        }
+        exit;
+    }
+
+    if ($_POST['action'] === 'register_member') {
+        $phone = $_POST['phone'];
+        $name = $_POST['name'];
+        
+        $stmt = $conn->prepare("INSERT INTO members (phone, name, points) VALUES (?, ?, 0)");
+        $stmt->bind_param("ss", $phone, $name);
+        
+        if ($stmt->execute()) {
+            echo json_encode(['success' => true, 'member' => ['id' => $conn->insert_id, 'phone' => $phone, 'name' => $name, 'points' => 0]]);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'ไม่สามารถสมัครสมาชิกได้ อาจมีเบอร์นี้ซ้ำในระบบ']);
+        }
         exit;
     }
 
@@ -260,16 +310,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $order_id = $_POST['order_id'];
         $total = $_POST['total'];
         $discount = $_POST['discount'];
+        $promo_amount = isset($_POST['promo_amount']) ? floatval($_POST['promo_amount']) : 0;
         $is_percent = isset($_POST['is_percent']) ? intval($_POST['is_percent']) : 1;
         $apply_sc = intval($_POST['apply_sc']);
         $apply_tax = intval($_POST['apply_tax']);
         
-        $sql = "UPDATE orders SET status = 'paid', total_amount = ?, discount_amount = ?, is_percent = ?, apply_sc = ?, apply_tax = ? WHERE id = ?";
+        // การจัดการแต้มและสมาชิกลูกค้า
+        $member_id = (isset($_POST['member_id']) && $_POST['member_id'] > 0) ? intval($_POST['member_id']) : null;
+        $points_used = isset($_POST['points_used']) ? intval($_POST['points_used']) : 0;
+        
+        // ยอดชำระสุทธิหลังหักการใช้แต้ม
+        $final_paid = max(0, $total - $points_used);
+        
+        // ทุก 100 บาทที่จ่ายจริง ได้ 1 แต้ม
+        $points_earned = $member_id ? floor($final_paid / 100) : 0;
+        
+        $sql = "UPDATE orders SET status = 'paid', total_amount = ?, discount_amount = ?, promo_amount = ?, is_percent = ?, apply_sc = ?, apply_tax = ?";
+        if ($member_id) {
+            $sql .= ", member_id = $member_id, points_earned = $points_earned, points_used = $points_used";
+        }
+        $sql .= " WHERE id = ?";
+        
         $stmt = $conn->prepare($sql);
-        $stmt->bind_param("ddiiii", $total, $discount, $is_percent, $apply_sc, $apply_tax, $order_id);
+        $stmt->bind_param("dddiiii", $final_paid, $discount, $promo_amount, $is_percent, $apply_sc, $apply_tax, $order_id);
         $result = $stmt->execute();
 
         if ($result) {
+            if ($member_id) {
+                // หักแต้มที่ใช้ และบวกแต้มที่ได้ใหม่
+                $conn->query("UPDATE members SET points = points - $points_used + $points_earned WHERE id = $member_id");
+            }
+
             // ตัดสต็อกสินค้าตามรายการที่มีในบิล
             $items_sql = "SELECT item_name, SUM(quantity) as sum_qty FROM order_items WHERE order_id = ? AND status = 'active' GROUP BY item_name";
             $items_stmt = $conn->prepare($items_sql);
@@ -288,13 +359,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         $ml_to_cut = $p_data['ml_per_unit'] * $item['sum_qty'];
                         $target_id = $p_data['inventory_id'];
                         $conn->query("UPDATE products SET open_ml = open_ml - $ml_to_cut WHERE id = $target_id");
+                        
+                        // บันทึกประวัติการตัด ml
+                        $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'ml', 'sale')");
+                        $neg_ml = -$ml_to_cut;
+                        $log_stmt->bind_param("ii", $target_id, $neg_ml);
+                        $log_stmt->execute();
                     } else {
                         // สินค้าหลัก หรือ สินค้าที่ขายเป็นขวด/ชิ้นเต็ม ให้ตัดสต็อกปกติ
                         $qty_to_cut = $item['sum_qty'];
                         $target_id = ($p_data['inventory_id'] !== null) ? $p_data['inventory_id'] : $p_data['id'];
                         $conn->query("UPDATE products SET stock_qty = stock_qty - $qty_to_cut WHERE id = $target_id");
                         
-                        $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, type) VALUES (?, ?, 'sale')");
+                        $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'unit', 'sale')");
                         $neg_qty = -$qty_to_cut;
                         $log_stmt->bind_param("ii", $target_id, $neg_qty);
                         $log_stmt->execute();
@@ -304,6 +381,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         echo json_encode(['success' => $result]);
+        exit;
+    }
+
+    // ---------------------------------
+    // ส่วนจัดการ API โปรโมชั่น (Automated Promotions)
+    // ---------------------------------
+    if ($_POST['action'] === 'get_active_promotions') {
+        $sql = "SELECT * FROM promotions WHERE is_active = 1";
+        $res = $conn->query($sql);
+        echo json_encode($res->fetch_all(MYSQLI_ASSOC));
+        exit;
+    }
+
+    if ($_POST['action'] === 'toggle_promotion') {
+        $id = intval($_POST['id']);
+        $is_active = intval($_POST['is_active']);
+        $stmt = $conn->prepare("UPDATE promotions SET is_active = ? WHERE id = ?");
+        $stmt->bind_param("ii", $is_active, $id);
+        echo json_encode(['success' => $stmt->execute()]);
+        exit;
+    }
+
+    if ($_POST['action'] === 'delete_promotion') {
+        $id = intval($_POST['id']);
+        $stmt = $conn->prepare("DELETE FROM promotions WHERE id = ?");
+        $stmt->bind_param("i", $id);
+        echo json_encode(['success' => $stmt->execute()]);
+        exit;
+    }
+
+    if ($_POST['action'] === 'save_promotion') {
+        $id = !empty($_POST['id']) ? intval($_POST['id']) : 0;
+        $name = $_POST['name'];
+        $promo_type = $_POST['promo_type'];
+        $target_cat = $_POST['target_category'];
+        
+        // รับค่า Array ของสินค้าที่เลือก และตัดค่าที่ว่างเปล่าออก
+        $target_item_arr = isset($_POST['target_item']) ? $_POST['target_item'] : [];
+        if (!is_array($target_item_arr)) { $target_item_arr = [$target_item_arr]; }
+        $target_item_arr = array_filter($target_item_arr, function($val) { return trim($val) !== ""; });
+        $target_item = !empty($target_item_arr) ? json_encode(array_values($target_item_arr), JSON_UNESCAPED_UNICODE) : null;
+
+        $c_qty = !empty($_POST['condition_qty']) ? intval($_POST['condition_qty']) : 0;
+        $r_qty = !empty($_POST['reward_qty']) ? intval($_POST['reward_qty']) : 0;
+        $d_pct = !empty($_POST['discount_percent']) ? floatval($_POST['discount_percent']) : 0;
+        $st = !empty($_POST['start_time']) ? $_POST['start_time'] : null;
+        $et = !empty($_POST['end_time']) ? $_POST['end_time'] : null;
+
+        if ($id > 0) {
+            $stmt = $conn->prepare("UPDATE promotions SET name=?, promo_type=?, target_category=?, target_item=?, condition_qty=?, reward_qty=?, discount_percent=?, start_time=?, end_time=? WHERE id=?");
+            if (!$stmt) { echo json_encode(['success' => false, 'error' => $conn->error]); exit; }
+            $stmt->bind_param("ssssiidssi", $name, $promo_type, $target_cat, $target_item, $c_qty, $r_qty, $d_pct, $st, $et, $id);
+        } else {
+            $stmt = $conn->prepare("INSERT INTO promotions (name, promo_type, target_category, target_item, condition_qty, reward_qty, discount_percent, start_time, end_time, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)");
+            if (!$stmt) { echo json_encode(['success' => false, 'error' => $conn->error]); exit; }
+            $stmt->bind_param("ssssiidss", $name, $promo_type, $target_cat, $target_item, $c_qty, $r_qty, $d_pct, $st, $et);
+        }
+        echo json_encode(['success' => $stmt->execute(), 'error' => $conn->error]);
         exit;
     }
 }
@@ -367,12 +502,23 @@ function addSpecialItem($order_id, $item_name, $price, $quantity = 1, $emp_id) {
 }
 
 // เพิ่มสินค้าใหม่ลงในฐานข้อมูล (Master Data)
-function addProduct($name, $price, $category, $stock = 0, $ml = 0, $inv_id = null) {
+function addProduct($name, $price, $category, $stock = 0, $ml = 0, $inv_id = null, $show_on_pos = 1) {
     global $conn;
-    $sql = "INSERT INTO products (name, price, category, stock_qty, ml_per_unit, inventory_id) VALUES (?, ?, ?, ?, ?, ?)";
+    $sql = "INSERT INTO products (name, price, category, stock_qty, ml_per_unit, inventory_id, show_on_pos) VALUES (?, ?, ?, ?, ?, ?, ?)";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("sdsiii", $name, $price, $category, $stock, $ml, $inv_id);
-    return $stmt->execute();
+    $stmt->bind_param("sdsiiii", $name, $price, $category, $stock, $ml, $inv_id, $show_on_pos);
+    
+    if ($stmt->execute()) {
+        $new_product_id = $conn->insert_id;
+        // หากมีการใส่จำนวนสต็อกเริ่มต้น ให้บันทึกประวัติเข้า stock_logs ด้วย
+        if ($stock > 0) {
+            $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'unit', 'restock')");
+            $log_stmt->bind_param("ii", $new_product_id, $stock);
+            $log_stmt->execute();
+        }
+        return true;
+    }
+    return false;
 }
 
 // ฟังก์ชันสำหรับรายงานยอดขาย (สรุปเบื้องต้น)

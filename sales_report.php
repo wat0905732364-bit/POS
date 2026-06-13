@@ -21,6 +21,28 @@ if ($res_daily && $res_daily->num_rows > 0) {
     $chart_labels = array_reverse($chart_labels);
     $chart_data = array_reverse($chart_data);
 }
+
+// เตรียมข้อมูลสัดส่วนยอดขายตามหมวดหมู่ (ดึงยอดขายสุทธิที่ถูกจ่ายแล้วมาคำนวณ)
+$sql_cat = "SELECT COALESCE(p.category, 'อื่นๆ (ไม่มีหมวด)') as category_name, 
+                   SUM((oi.price - COALESCE(oi.item_discount, 0)) * oi.quantity) as cat_total 
+            FROM order_items oi 
+            JOIN orders o ON oi.order_id = o.id 
+            LEFT JOIN products p ON oi.item_name = p.name 
+            WHERE o.status = 'paid' AND oi.status = 'active' 
+            GROUP BY category_name 
+            ORDER BY cat_total DESC";
+$res_cat = $conn->query($sql_cat);
+$cat_labels = []; $cat_data = []; $chart_cat_colors = [];
+$colors = ['#ff9800', '#2ecc71', '#3498db', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22', '#34495e'];
+if ($res_cat && $res_cat->num_rows > 0) {
+    $c_idx = 0;
+    while($row = $res_cat->fetch_assoc()) {
+        $cat_labels[] = $row['category_name'];
+        $cat_data[] = floatval($row['cat_total']);
+        $chart_cat_colors[] = $colors[$c_idx % count($colors)];
+        $c_idx++;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -100,13 +122,27 @@ if ($res_daily && $res_daily->num_rows > 0) {
     <div class="container">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <a href="index.php">← กลับหน้าขาย (POS)</a>
-            <a href="stock_report.php">📦 จัดการสต็อกสินค้า</a>
+            <div>
+                <a href="stock_report.php" style="margin-right: 15px;">📦 จัดการสต็อกสินค้า</a>
+                <a href="promotions.php">🎁 โปรโมชั่น</a>
+            </div>
         </div>
         <h1>รายงานยอดขาย</h1>
 
-        <!-- ส่วนแสดงกราฟยอดขาย -->
-        <div style="background: #1a1d29; padding: 20px; border-radius: 15px; margin-bottom: 30px; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-            <canvas id="salesChart" height="100"></canvas>
+        <!-- ส่วนแสดงกราฟแบบแบ่งฝั่ง (Flexbox) -->
+        <div style="display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 30px;">
+            <!-- กราฟยอดขายรายวัน -->
+            <div style="flex: 2; min-width: 450px; background: #1a1d29; padding: 20px; border-radius: 15px; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+                <h3 style="color: #00d4ff; margin-top: 0; text-align: center;">📈 ยอดขายรายวัน (30 วันย้อนหลัง)</h3>
+                <canvas id="salesChart" height="120"></canvas>
+            </div>
+            <!-- กราฟหมวดหมู่ -->
+            <div style="flex: 1; min-width: 280px; background: #1a1d29; padding: 20px; border-radius: 15px; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.3); display: flex; flex-direction: column; align-items: center;">
+                <h3 style="color: #ff9800; margin-top: 0; text-align: center;">🍕 สัดส่วนยอดขายตามหมวดหมู่</h3>
+                <div style="width: 100%; max-width: 250px; flex-grow: 1; display: flex; align-items: center; justify-content: center; margin-top: 10px;">
+                    <canvas id="categoryChart"></canvas>
+                </div>
+            </div>
         </div>
 
         <script>
@@ -136,6 +172,32 @@ if ($res_daily && $res_daily->num_rows > 0) {
                             x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#aaa', font: { family: 'Sarabun' } } }
                         },
                         plugins: { legend: { labels: { color: '#fff', font: { family: 'Sarabun', size: 14 } } } }
+                    }
+                });
+
+                // วาดกราฟหมวดหมู่ (Doughnut Chart)
+                const ctxCat = document.getElementById('categoryChart').getContext('2d');
+                new Chart(ctxCat, {
+                    type: 'doughnut',
+                    data: {
+                        labels: <?php echo json_encode($cat_labels); ?>,
+                        datasets: [{
+                            data: <?php echo json_encode($cat_data); ?>,
+                            backgroundColor: <?php echo json_encode($chart_cat_colors); ?>,
+                            borderColor: '#1a1d29', // สีกรอบของแต่ละชิ้นให้กลืนกับพื้นหลัง
+                            borderWidth: 2,
+                            hoverOffset: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { 
+                            legend: { 
+                                position: 'bottom', 
+                                labels: { color: '#fff', font: { family: 'Sarabun', size: 12 }, padding: 15 } 
+                            }
+                        }
                     }
                 });
             });

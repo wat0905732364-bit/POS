@@ -1,5 +1,11 @@
 <?php
 require 'config.php';
+
+// อัพเดทฐานข้อมูลเพิ่ม column 'unit' อัตโนมัติ (เพื่อรองรับการบันทึก ml/ขวด แยกกัน)
+$chk = $conn->query("SHOW COLUMNS FROM stock_logs LIKE 'unit'");
+if ($chk && $chk->num_rows == 0) {
+    $conn->query("ALTER TABLE stock_logs ADD unit VARCHAR(20) NOT NULL DEFAULT 'unit' AFTER qty_change");
+}
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -45,15 +51,26 @@ require 'config.php';
 
         /* Modal Styles */
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
-        .modal-box { background: var(--card); padding: 35px; border-radius: 20px; width: 480px; border: 1px solid #333; animation: slideUp 0.3s ease-out; }
+        .modal-box { background: var(--card); padding: 25px; border-radius: 20px; width: 480px; max-height: 85vh; overflow-y: auto; border: 1px solid #333; animation: slideUp 0.3s ease-out; }
+        .modal-box::-webkit-scrollbar { width: 6px; }
+        .modal-box::-webkit-scrollbar-track { background: var(--card); border-radius: 10px; }
+        .modal-box::-webkit-scrollbar-thumb { background: #444; border-radius: 10px; }
+        .modal-box::-webkit-scrollbar-thumb:hover { background: var(--primary); }
         @keyframes slideUp { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-        .modal-box h2 { margin-top: 0; color: var(--primary); margin-bottom: 25px; }
-        .input-group { margin-bottom: 20px; }
+        .modal-box h2 { margin-top: 0; color: var(--primary); margin-bottom: 15px; }
+        .input-group { margin-bottom: 15px; }
         .input-group label { display: block; margin-bottom: 8px; color: #888; font-size: 13px; }
-        .input-group input, .input-group select { width: 100%; padding: 12px; background: #0f111a; border: 1px solid #333; color: white; border-radius: 8px; box-sizing: border-box; font-size: 15px; }
-        .modal-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 30px; }
+        .input-group input, .input-group select { width: 100%; padding: 10px; background: #0f111a; border: 1px solid #333; color: white; border-radius: 8px; box-sizing: border-box; font-size: 15px; }
+        .modal-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
         .btn-save { background: var(--primary); color: #000; border: none; padding: 12px 25px; border-radius: 8px; font-weight: bold; cursor: pointer; }
         .btn-cancel { background: #333; color: white; border: none; padding: 12px 25px; border-radius: 8px; cursor: pointer; }
+        
+        /* Detail Modal Styles */
+        .detail-table { width: 100%; text-align: left; border-collapse: collapse; margin-top: 15px; }
+        .detail-table th { background: #252a3a; padding: 10px; font-size: 13px; color: var(--primary); border-bottom: none; }
+        .detail-table td { padding: 10px; border-bottom: 1px solid #252a3a; font-size: 14px; }
+        .qty-in { color: var(--success); font-weight: bold; }
+        .qty-out { color: var(--danger); font-weight: bold; }
     </style>
     <script>
         async function updateStock(productId, actionType = 'add') {
@@ -146,6 +163,7 @@ require 'config.php';
             document.getElementById('edit_open_ml').value = product.open_ml || 0;
             document.getElementById('edit_ml_per_unit').value = product.ml_per_unit;
             document.getElementById('edit_inventory_id').value = product.inventory_id || '';
+            document.getElementById('edit_show_on_pos').value = product.show_on_pos !== undefined ? product.show_on_pos : 1;
             
             document.getElementById('editModal').style.display = 'flex';
         }
@@ -173,6 +191,46 @@ require 'config.php';
                 alert('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
             }
         }
+
+        async function viewStockDetail(date) {
+            document.getElementById('detailModalDate').innerText = date;
+            const tableBody = document.getElementById('detail-table-body');
+            tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center;">กำลังโหลด...</td></tr>';
+            document.getElementById('detailModal').style.display = 'flex';
+
+            const formData = new FormData();
+            formData.append('action', 'get_daily_stock_details');
+            formData.append('date', date);
+
+            try {
+                const response = await fetch('pos_action.php', { method: 'POST', body: formData });
+                const result = await response.json();
+                
+                tableBody.innerHTML = '';
+                if (result.length === 0) {
+                    tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center;">ไม่มีข้อมูลในวันนี้</td></tr>';
+                } else {
+                    let totalInUnit = 0, totalOutUnit = 0, totalOutMl = 0;
+                    result.forEach(row => {
+                        const isOut = parseInt(row.qty_change) < 0;
+                        const qtyText = (isOut ? '' : '+') + row.qty_change + ' ' + (row.unit === 'ml' ? 'ml' : 'ชิ้น/ขวด');
+                        const qtyClass = isOut ? 'qty-out' : 'qty-in';
+                        
+                        if (!isOut && row.unit === 'unit') totalInUnit += parseInt(row.qty_change);
+                        if (isOut && row.unit === 'unit') totalOutUnit += Math.abs(parseInt(row.qty_change));
+                        if (isOut && row.unit === 'ml') totalOutMl += Math.abs(parseInt(row.qty_change));
+
+                        let typeText = row.type === 'sale' ? 'ตัดสต็อก (ขาย/เปิด)' : 'เติมสต็อก';
+                        const timeMatch = row.created_at.match(/ (\d{2}:\d{2})/);
+                        const time = timeMatch ? timeMatch[1] : '-';
+
+                        tableBody.innerHTML += `<tr><td>${time}</td><td>${row.name}</td><td><span class="${qtyClass}">${qtyText}</span></td><td><small style="color:#aaa;">${typeText}</small></td></tr>`;
+                    });
+                    document.getElementById('summary-detail').innerHTML = `<b>สรุปวันนี้:</b> เติมเข้า <span class="qty-in">+${totalInUnit} ชิ้น</span> | ขายออก <span class="qty-out">-${totalOutUnit} ชิ้น</span> และขายออก <span class="qty-out">-${totalOutMl} ml</span>`;
+                }
+            } catch (e) { console.error(e); tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:red;">เกิดข้อผิดพลาดในการดึงข้อมูล</td></tr>'; }
+        }
+        function closeDetailModal() { document.getElementById('detailModal').style.display = 'none'; }
     </script>
 </head>
 <body>
@@ -184,6 +242,7 @@ require 'config.php';
                 <a href="index.php">หน้าขาย (POS)</a>
                 <a href="sales_report.php">รายงานยอดขาย</a>
                 <a href="stock_report.php" class="active">จัดการสต็อก</a>
+                <a href="promotions.php">โปรโมชั่น</a>
             </div>
         </div>
 
@@ -227,6 +286,9 @@ require 'config.php';
                             $placeholder = "ขวด/ชิ้น หรือ ml";
                         }
                         $safeRowData = htmlspecialchars(json_encode($row), ENT_QUOTES, 'UTF-8');
+                        if (isset($row['show_on_pos']) && $row['show_on_pos'] == 0) {
+                            $displayName .= " <br><span style='background:#ff4d4d; color:white; padding:2px 5px; border-radius:3px; font-size:10px;'>ซ่อนจาก POS</span>";
+                        }
 
                         echo "<tr>";
                         echo "<td><small>" . htmlspecialchars($row['category']) . "</small></td>";
@@ -257,25 +319,29 @@ require 'config.php';
                     <th>วันที่</th>
                     <th>เติมเข้า (+)</th>
                     <th>ขายออก (-)</th>
-                    <th>สถานะสุทธิ</th>
+                    <th>ขายออกแบบเท (ml)</th>
+                    <th>จัดการ</th>
                 </tr>
             </thead>
             <tbody>
                 <?php
                 $sql_move = "SELECT DATE(created_at) as move_date, 
-                             SUM(CASE WHEN qty_change > 0 THEN qty_change ELSE 0 END) as total_in,
-                             SUM(CASE WHEN qty_change < 0 THEN ABS(qty_change) ELSE 0 END) as total_out
+                             SUM(CASE WHEN qty_change > 0 AND unit = 'unit' THEN qty_change ELSE 0 END) as total_in_unit,
+                             SUM(CASE WHEN qty_change < 0 AND unit = 'unit' THEN ABS(qty_change) ELSE 0 END) as total_out_unit,
+                             SUM(CASE WHEN qty_change < 0 AND unit = 'ml' THEN ABS(qty_change) ELSE 0 END) as total_out_ml
                              FROM stock_logs 
                              GROUP BY DATE(created_at) ORDER BY move_date DESC LIMIT 7";
                 $res_move = $conn->query($sql_move);
-                while($m = $res_move->fetch_assoc()) {
-                    $net = $m['total_in'] - $m['total_out'];
-                    echo "<tr>";
-                    echo "<td>" . date('d/m/Y', strtotime($m['move_date'])) . "</td>";
-                    echo "<td style='color:#2ecc71;'>+" . $m['total_in'] . "</td>";
-                    echo "<td style='color:#ff4d4d;'>-" . $m['total_out'] . "</td>";
-                    echo "<td>" . ($net >= 0 ? "+$net" : "$net") . "</td>";
-                    echo "</tr>";
+                if($res_move) {
+                    while($m = $res_move->fetch_assoc()) {
+                        echo "<tr>";
+                        echo "<td>" . date('d/m/Y', strtotime($m['move_date'])) . "</td>";
+                        echo "<td style='color:#2ecc71;'>+" . $m['total_in_unit'] . " ชิ้น</td>";
+                        echo "<td style='color:#ff4d4d;'>-" . $m['total_out_unit'] . " ชิ้น</td>";
+                        echo "<td style='color:#f1c40f;'>" . ($m['total_out_ml'] > 0 ? "-".$m['total_out_ml']." ml" : "-") . "</td>";
+                        echo "<td><button onclick='viewStockDetail(\"{$m['move_date']}\")' class='btn-edit' style='background:#3498db; color:white;'>🔍 ดูรายละเอียด</button></td>";
+                        echo "</tr>";
+                    }
                 }
                 ?>
             </tbody>
@@ -329,6 +395,13 @@ require 'config.php';
                             ?>
                         </select>
                     </div>
+                    <div class="input-group">
+                        <label>แสดงบนหน้าขาย (POS) หรือไม่?:</label>
+                        <select name="show_on_pos">
+                            <option value="1">✅ แสดงเป็นเมนูให้กดขาย</option>
+                            <option value="0">❌ ซ่อนไว้ (ใช้เป็นสต็อกหลักอย่างเดียว)</option>
+                        </select>
+                    </div>
                 </form>
                 <div class="modal-footer">
                     <button class="btn-cancel" onclick="closeAddModal()">ยกเลิก</button>
@@ -377,10 +450,41 @@ require 'config.php';
                             ?>
                         </select>
                     </div>
+                    <div class="input-group">
+                        <label>แสดงบนหน้าขาย (POS) หรือไม่?:</label>
+                        <select name="show_on_pos" id="edit_show_on_pos">
+                            <option value="1">✅ แสดงเป็นเมนูให้กดขาย</option>
+                            <option value="0">❌ ซ่อนไว้ (ใช้เป็นสต็อกหลักอย่างเดียว)</option>
+                        </select>
+                    </div>
                 </form>
                 <div class="modal-footer">
                     <button class="btn-cancel" onclick="closeEditModal()">ยกเลิก</button>
                     <button class="btn-save" style="background: #f1c40f; color: black;" onclick="submitEditProduct()">บันทึกการแก้ไข</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Modal สำหรับดูรายละเอียดความเคลื่อนไหวสต็อกรายวัน -->
+        <div id="detailModal" class="modal-overlay">
+            <div class="modal-box" style="width: 600px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px;">
+                    <h2 style="margin:0;">📅 รายละเอียดสต็อก: <span id="detailModalDate"></span></h2>
+                    <button class="btn-cancel" style="padding: 5px 10px;" onclick="closeDetailModal()">ปิด</button>
+                </div>
+                <div id="summary-detail" style="background:#252a3a; padding: 10px; border-radius: 8px; font-size:14px; margin-bottom: 15px;"></div>
+                <div style="max-height: 400px; overflow-y: auto;">
+                    <table class="detail-table">
+                        <thead>
+                            <tr>
+                                <th width="15%">เวลา</th>
+                                <th width="45%">สินค้า</th>
+                                <th width="20%">เข้า/ออก</th>
+                                <th width="20%">ประเภท</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detail-table-body"></tbody>
+                    </table>
                 </div>
             </div>
         </div>

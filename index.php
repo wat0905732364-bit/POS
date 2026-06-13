@@ -6,7 +6,7 @@ require 'config.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bar POS System</title>
+    <title>FROG POS System</title>
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700&display=swap" rel="stylesheet">
 
 <script>
@@ -18,7 +18,9 @@ require 'config.php';
         applyTax: true,
         applySC: true,
         discount: 0,
-        isPercent: true
+        isPercent: true,
+        member: null,
+        pointsUsed: 0
     };
 
     let lineDiscState = {
@@ -28,6 +30,7 @@ require 'config.php';
     };
 
     let currentOrderId = null; 
+    let activePromotions = []; // เก็บโปรโมชั่นที่เปิดใช้งาน
 
     // ฟังก์ชันสลับการคำนวณภาษี/SC
     function toggleTax() {
@@ -55,13 +58,82 @@ require 'config.php';
         updateDisplay();
     }
 
+    // --- ระบบโปรโมชั่นอัตโนมัติ (Automated Promotions) ---
+    function isTimeActive(start, end) {
+        if (!start || !end) return true; // ถ้าไม่ได้ระบุเวลา ถือว่าใช้ได้ตลอด
+        const now = new Date();
+        const current = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0') + ':00';
+        
+        if (start <= end) {
+            return current >= start && current <= end;
+        } else {
+            return current >= start || current <= end; // ข้ามคืน
+        }
+    }
+
+    function applyAutomatedPromotions() {
+        let promoDiscount = 0;
+        let promoMessages = [];
+
+        activePromotions.forEach(promo => {
+            if (!isTimeActive(promo.start_time, promo.end_time)) return; 
+
+            let targetItemsArray = null;
+            if (promo.target_item) {
+                try {
+                    let parsed = JSON.parse(promo.target_item);
+                    targetItemsArray = Array.isArray(parsed) ? parsed : [promo.target_item];
+                } catch(e) {
+                    targetItemsArray = [promo.target_item]; // รองรับข้อมูลเก่า
+                }
+            }
+
+            if (promo.promo_type === 'discount_percent') {
+                let catTotal = 0;
+                currentOrder.items.forEach(item => {
+                    let matchCategory = item.category === promo.target_category;
+                    let matchItem = targetItemsArray ? targetItemsArray.includes(item.name) : true;
+                    if (matchCategory && matchItem) {
+                        catTotal += ((item.price - (item.item_discount || 0)) * item.quantity);
+                    }
+                });
+                if (catTotal > 0) {
+                    let discount = catTotal * (parseFloat(promo.discount_percent) / 100);
+                    promoDiscount += discount;
+                    promoMessages.push(`${promo.name}: -฿${discount.toLocaleString(undefined, {minimumFractionDigits: 2})}`);
+                }
+            } else if (promo.promo_type === 'buy_x_get_y') {
+                let condition = parseInt(promo.condition_qty);
+                let reward = parseInt(promo.reward_qty);
+                let requiredTotal = condition + reward; 
+
+                currentOrder.items.forEach(item => {
+                    let matchCategory = item.category === promo.target_category;
+                    let matchItem = targetItemsArray ? targetItemsArray.includes(item.name) : true;
+                    if (matchCategory && matchItem && item.quantity >= requiredTotal) {
+                        let freeCount = Math.floor(item.quantity / requiredTotal) * reward;
+                        let discount = freeCount * (item.price - (item.item_discount || 0));
+                        promoDiscount += discount;
+                        promoMessages.push(`${promo.name} (${item.name}): -฿${discount.toLocaleString(undefined, {minimumFractionDigits: 2})}`);
+                    }
+                });
+            }
+        });
+
+        return { discount: promoDiscount, messages: promoMessages };
+    }
+
     // ฟังก์ชันส่งค่าการตั้งค่าบิลไปบันทึกในฐานข้อมูลทันที
     async function syncOrderSettings() {
         if (!currentOrderId) return;
+        
+        let promos = applyAutomatedPromotions();
+
         const formData = new FormData();
         formData.append('action', 'update_order_settings');
         formData.append('order_id', currentOrderId);
         formData.append('discount', currentOrder.discount);
+        formData.append('promo_amount', promos.discount);
         formData.append('is_percent', currentOrder.isPercent ? 1 : 0);
         formData.append('apply_sc', currentOrder.applySC ? 1 : 0);
         formData.append('apply_tax', currentOrder.applyTax ? 1 : 0);
@@ -90,6 +162,116 @@ require 'config.php';
         if (!orderId) { alert("กรุณาเลือกบิลก่อน"); return; }
         await syncOrderSettings(); // บันทึกสถานะ VAT/SC/ส่วนลด ล่าสุดก่อน
         window.open('generate_tax_invoice.php?order_id=' + orderId, '_blank');
+    }
+
+    // --- ระบบสมาชิก (CRM) ---
+    async function checkMember() {
+        const phone = document.getElementById('memberPhone').value;
+        if (!phone) { alert("กรุณากรอกเบอร์โทรศัพท์"); return; }
+        
+        const formData = new FormData();
+        formData.append('action', 'check_member');
+        formData.append('phone', phone);
+        
+        try {
+            const response = await fetch('pos_action.php', { method: 'POST', body: formData });
+            const result = await response.json();
+            if (result.success) {
+                setMember(result.member);
+            } else {
+                alert(result.message);
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    function setMember(member) {
+        currentOrder.member = member;
+        currentOrder.pointsUsed = 0;
+        
+        document.getElementById('member-search-box').style.display = 'none';
+        document.getElementById('member-info-box').style.display = 'flex';
+        document.getElementById('display-member-name').innerText = "👤 " + member.name + " (" + member.phone + ")";
+        document.getElementById('display-member-points').innerText = member.points;
+        document.getElementById('memberPhone').value = '';
+        
+        updateDisplay();
+    }
+
+    function removeMember() {
+        currentOrder.member = null;
+        currentOrder.pointsUsed = 0;
+        document.getElementById('member-search-box').style.display = 'flex';
+        document.getElementById('member-info-box').style.display = 'none';
+        updateDisplay();
+    }
+
+    function usePoints() {
+        if (!currentOrder.member) return;
+        
+        if (currentOrder.pointsUsed > 0) {
+            currentOrder.pointsUsed = 0;
+            document.getElementById('btn-use-points').innerText = "ใช้แต้มเป็นส่วนลด";
+            document.getElementById('btn-use-points').style.background = "#3498db";
+        } else {
+            let subtotal = currentOrder.items.reduce((acc, item) => acc + ((item.price - (item.item_discount || 0)) * item.quantity), 0);
+            let sc = currentOrder.applySC ? (subtotal * 0.10) : 0;
+            let tax = currentOrder.applyTax ? ((subtotal + sc) * 0.07) : 0;
+            let discountVal = parseFloat(currentOrder.discount || 0);
+            let discount = currentOrder.isPercent ? (subtotal * (discountVal / 100)) : discountVal;
+            
+            let promos = applyAutomatedPromotions();
+            let promoDiscount = promos.discount;
+            
+            let totalBeforePoints = Math.max(0, (subtotal + sc + tax) - discount - promoDiscount);
+            
+            let maxPointsToUse = Math.min(currentOrder.member.points, Math.floor(totalBeforePoints));
+            
+            if (maxPointsToUse <= 0) {
+                alert("ไม่มีแต้มเพียงพอ หรือยอดบิลเป็น 0");
+                return;
+            }
+            
+            const useAmt = prompt(`มีแต้ม ${currentOrder.member.points} แต้ม\nแลกเป็นส่วนลดได้สูงสุด ฿${maxPointsToUse}\nต้องการใช้กี่แต้ม? (1 แต้ม = 1 บาท)`, maxPointsToUse);
+            
+            if (useAmt !== null) {
+                let parsedAmt = parseInt(useAmt);
+                if (isNaN(parsedAmt) || parsedAmt <= 0) return;
+                if (parsedAmt > currentOrder.member.points) { alert("แต้มที่มีไม่พอ"); return; }
+                if (parsedAmt > totalBeforePoints) { alert("ใช้แต้มเกินยอดสุทธิของบิลไม่ได้"); return; }
+                
+                currentOrder.pointsUsed = parsedAmt;
+                document.getElementById('btn-use-points').innerText = `ยกเลิกใช้แต้ม (-฿${parsedAmt})`;
+                document.getElementById('btn-use-points').style.background = "#e67e22";
+            }
+        }
+        updateDisplay();
+    }
+
+    function openRegisterMemberModal() {
+        document.getElementById('regMemberPhone').value = document.getElementById('memberPhone').value;
+        document.getElementById('regMemberName').value = '';
+        document.getElementById('registerMemberModal').style.display = 'flex';
+    }
+
+    async function submitRegisterMember() {
+        const phone = document.getElementById('regMemberPhone').value;
+        const name = document.getElementById('regMemberName').value;
+        
+        if (!phone || !name) { alert("กรุณากรอกข้อมูลให้ครบถ้วน"); return; }
+        const formData = new FormData();
+        formData.append('action', 'register_member');
+        formData.append('phone', phone);
+        formData.append('name', name);
+
+        try {
+            const response = await fetch('pos_action.php', { method: 'POST', body: formData });
+            const result = await response.json();
+            if (result.success) {
+                alert("สมัครสมาชิกสำเร็จ!");
+                document.getElementById('registerMemberModal').style.display = 'none';
+                setMember(result.member);
+            } else { alert("ข้อผิดพลาด: " + result.message); }
+        } catch (e) { console.error(e); }
     }
 
     // ฟังก์ชันเพิ่มเมนูพิเศษ (กำหนดราคาเอง)
@@ -209,7 +391,7 @@ require 'config.php';
                             <button onclick="removeFromOrder('${item.name.replace(/'/g, "\\'")}')" 
                                 style="background:#e74c3c; color:white; border:none; border-radius:4px; width:28px; height:28px; cursor:pointer; font-weight:bold;">-</button>
                             <b style="color:#00d4ff; min-width:20px; text-align:center;">${item.quantity}</b>
-                            <button onclick="addToOrder('${item.name.replace(/'/g, "\\'")}', ${item.price})" 
+                            <button onclick="addToOrder('${item.name.replace(/'/g, "\\'")}', ${item.price}, 0, '${item.category || ''}')" 
                                 style="background:#2ecc71; color:white; border:none; border-radius:4px; width:28px; height:28px; cursor:pointer; font-weight:bold;">+</button>
                             <button onclick="promptItemDiscount('${item.name.replace(/'/g, "\\'")}', ${item.price}, ${itemDisc})" 
                                 style="background:#f1c40f; color:black; border:none; border-radius:4px; padding:2px 8px; cursor:pointer; font-size:11px; font-weight:bold;">💸 ส่วนลด</button>
@@ -223,7 +405,13 @@ require 'config.php';
         let tax = currentOrder.applyTax ? ((subtotal + sc) * 0.07) : 0;
         let discountVal = parseFloat(currentOrder.discount || 0);
         let discount = currentOrder.isPercent ? (subtotal * (discountVal / 100)) : discountVal;
-        let total = Math.max(0, (subtotal + sc + tax) - discount);
+        
+        let promos = applyAutomatedPromotions();
+        let promoDiscount = promos.discount;
+        
+        let totalBeforePoints = Math.max(0, (subtotal + sc + tax) - discount - promoDiscount);
+        let pointsDiscount = currentOrder.pointsUsed || 0;
+        let total = Math.max(0, totalBeforePoints - pointsDiscount);
 
         document.getElementById('table-display').innerText = currentOrder.table || '--';
         document.getElementById('order-id-display').innerText = currentOrder.id || '--';
@@ -234,6 +422,23 @@ require 'config.php';
         document.getElementById('summary-sc').innerText = '฿' + sc.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
         document.getElementById('summary-tax').innerText = '฿' + tax.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
         document.getElementById('summary-ispercent').innerText = currentOrder.isPercent ? '(' + currentOrder.discount + '%)' : '';
+        
+        let promoHTML = '';
+        if (promos.messages.length > 0) {
+            promos.messages.forEach(msg => {
+                promoHTML += `<div style="display:flex; justify-content:space-between; color:#ff9800; font-weight:bold; margin-bottom:5px;"><span>🎁 ${msg}</span></div>`;
+            });
+        }
+        document.getElementById('promo-messages-container').innerHTML = promoHTML;
+
+        const linePoints = document.getElementById('line-points-discount');
+        if (pointsDiscount > 0) {
+            linePoints.style.display = 'flex';
+            document.getElementById('summary-points-discount').innerText = '- ฿' + pointsDiscount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        } else {
+            linePoints.style.display = 'none';
+        }
+
         document.getElementById('summary-total').innerText = total.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
         // อัปเดตสถานะปุ่ม (Visual Toggle)
@@ -266,9 +471,10 @@ require 'config.php';
             const btn = document.createElement('button');
             btn.className = 'product-btn';
             const stockColor = p.stock_qty <= 5 ? '#ff4d4d' : '#2ecc71';
-            btn.innerHTML = `${p.name}<br><b>฿${p.price}</b><br>
-                             <small style="color:${stockColor}">Stock: ${p.stock_qty}</small>`;
-            btn.onclick = () => addToOrder(p.name, p.price);
+            btn.innerHTML = `<span style="font-size: 18px; display: block; margin-bottom: 8px;">${p.name}</span>
+                             <b style="font-size: 16px; color: #00d4ff;">฿${p.price}</b><br>
+                             <small style="color:${stockColor}; font-size: 13px;">Stock: ${p.stock_qty}</small>`;
+            btn.onclick = () => addToOrder(p.name, p.price, 0, p.category);
             container.appendChild(btn);
         });
     }
@@ -314,7 +520,7 @@ require 'config.php';
         }
     }
 
-    async function addToOrder(name, price, confirmOpen = 0) {
+    async function addToOrder(name, price, confirmOpen = 0, category = '') {
         if (!currentOrderId) { openTableModal(); return; }
 
         const formData = new FormData();
@@ -346,7 +552,7 @@ require 'config.php';
             if (existingItem) {
                 existingItem.quantity += 1;
             } else {
-                currentOrder.items.push({ name: name, price: parseFloat(price || 0), quantity: 1 });
+                currentOrder.items.push({ name: name, price: parseFloat(price || 0), quantity: 1, category: category });
             }
             updateDisplay();
         } catch (e) { 
@@ -516,15 +722,25 @@ require 'config.php';
         let tax = currentOrder.applyTax ? ((subtotal + sc) * 0.07) : 0;
         let discountVal = parseFloat(currentOrder.discount || 0);
         let discount = currentOrder.isPercent ? (subtotal * (discountVal / 100)) : discountVal;
-        let total = Math.max(0, (subtotal + sc + tax) - discount);
+        
+        let promos = applyAutomatedPromotions();
+        let promoDiscount = promos.discount;
+        
+        let totalBeforePoints = Math.max(0, (subtotal + sc + tax) - discount - promoDiscount);
 
         const formData = new FormData();
         formData.append('action', 'checkout_order');
         formData.append('order_id', orderId);
-        formData.append('total', total);
+        formData.append('total', totalBeforePoints);
         formData.append('discount', currentOrder.discount);
+        formData.append('promo_amount', promoDiscount);
         formData.append('apply_sc', currentOrder.applySC ? 1 : 0);
         formData.append('apply_tax', currentOrder.applyTax ? 1 : 0);
+        
+        if (currentOrder.member) {
+            formData.append('member_id', currentOrder.member.id);
+            formData.append('points_used', currentOrder.pointsUsed || 0);
+        }
 
         try {
             const response = await fetch('pos_action.php', { method: 'POST', body: formData });
@@ -643,43 +859,61 @@ require 'config.php';
             ...i, 
             price: parseFloat(i.price), 
             quantity: parseInt(i.quantity),
-            item_discount: parseFloat(i.item_discount || 0)
+            item_discount: parseFloat(i.item_discount || 0),
+            category: i.category || ''
         })) : [];
+        
+        currentOrder.member = null;
+        currentOrder.pointsUsed = 0;
+        document.getElementById('member-search-box').style.display = 'flex';
+        document.getElementById('member-info-box').style.display = 'none';
+        
         updateDisplay();
         loadActiveOrders(); // อัปเดตสีปุ่มบิลที่เลือก
+    }
+
+    async function loadPromotions() {
+        try {
+            const formData = new FormData();
+            formData.append('action', 'get_active_promotions');
+            const response = await fetch('pos_action.php', { method: 'POST', body: formData });
+            activePromotions = await response.json();
+        } catch (e) { console.error("Error loading promos:", e); }
     }
 
     // สั่งให้โหลดข้อมูลเมื่อเปิดหน้าจอ
     window.onload = () => {
         loadActiveOrders();
         loadProducts('Beer'); // โหลดสินค้าหมวดเบียร์รอไว้เลย
+        loadPromotions();
     };
 </script>
 
 <!-- ส่วนเมนูนำทาง (Navbar) -->
-<div style="width: 100%; max-width: 1200px; display: flex; justify-content: space-between; align-items: center; margin: 0 auto 10px auto; padding: 10px 0;">
-    <h1 style="color: #00d4ff; margin: 0;">BAR POS</h1>
+<div style="width: 100%; max-width: 1300px; display: flex; justify-content: space-between; align-items: center; margin: 0 auto 10px auto; padding: 10px 0;">
+    <h1 style="color: #00d4ff; margin: 0;">FROG POS</h1>
     <nav>
         <a href="index.php" style="color: #00d4ff; text-decoration: none; font-weight: bold; margin-left: 20px;">หน้าขาย (POS)</a>
         <a href="sales_report.php" style="color: white; text-decoration: none; margin-left: 20px;">รายงานยอดขาย</a>
         <a href="stock_report.php" style="color: white; text-decoration: none; margin-left: 20px;">จัดการสต็อก</a>
+        <a href="promotions.php" style="color: white; text-decoration: none; margin-left: 20px;">โปรโมชั่น</a>
     </nav>
 </div>
 
 <!-- ส่วนแสดงรายการบิลที่ค้างอยู่ -->
-<div id="active-orders-list" style="padding: 15px; background: #1a1d29; margin: 0 auto 15px auto; border-radius: 12px; width: 100%; max-width: 1200px; box-sizing: border-box; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+<div id="active-orders-list" style="padding: 15px; background: #1a1d29; margin: 0 auto 15px auto; border-radius: 12px; width: 100%; max-width: 1300px; box-sizing: border-box; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
     <b style="color:#00d4ff;">บิล (Orders): กำลังโหลด...</b>
 </div>
 
 <!-- เพิ่มปุ่มเปิดโต๊ะใหม่แบบ Manual -->
-<div style="width: 100%; max-width: 1200px; margin: 0 auto 20px auto;">
+<div style="width: 100%; max-width: 1300px; margin: 0 auto 20px auto;">
     <button onclick="openTableModal()" style="background:#00d4ff; color:black; font-weight:bold; padding:12px 25px; border-radius:10px; border:none; cursor:pointer; box-shadow: 0 4px 15px rgba(0,212,255,0.3);">🛎️ เปิดโต๊ะใหม่ (New Table)</button>
 </div>
 
 <div class="pos-container">
-    <!-- ส่วนแสดงหมวดหมู่ -->
-    <div class="categories">
-        <button onclick="openProductModal()" style="background:#2ecc71; color:white; font-weight:bold; border-radius:8px;">➕ เพิ่มเมนูใหม่</button>
+    <!-- แถบหมวดหมู่ด้านซ้าย (Left Sidebar) -->
+    <div class="category-sidebar">
+        <button onclick="openProductModal()" style="background:#2ecc71; color:white; font-weight:bold;">➕ เพิ่มเมนูใหม่</button>
         
         <?php
         // ดึงหมวดหมู่ทั้งหมดที่มีในระบบมาสร้างเป็นปุ่มโดยอัตโนมัติ
@@ -696,9 +930,11 @@ require 'config.php';
         }
         ?>
         
-        <button onclick="openSpecialModal()" style="background:#ff9800; color:white; font-weight:bold; border-radius:8px;">✨ Special Menu</button>
-        
-        <!-- พื้นที่แสดงปุ่มสินค้าที่ดึงมาจาก DB -->
+        <button onclick="openSpecialModal()" style="background:#ff9800; color:white; font-weight:bold;">✨ Special Menu</button>
+    </div>
+
+    <!-- พื้นที่แสดงปุ่มสินค้าตรงกลาง -->
+    <div class="product-area">
         <div id="product-display" class="product-grid"></div>
     </div>
 
@@ -707,6 +943,25 @@ require 'config.php';
         <div class="bill-header" style="border-bottom: 2px solid #00d4ff; padding-bottom: 10px; margin-bottom: 15px;">
             <h2 style="margin:0; color:#00d4ff; font-size: 24px;">TABLE <span id="table-display">--</span></h2>
             <small style="color:#999;">Order ID: #<span id="order-id-display">--</span></small>
+            
+            <!-- ส่วนสมาชิกลูกค้า (CRM) -->
+            <div style="margin-top: 10px; padding: 10px; background: #252a3a; border-radius: 8px; font-size: 13px;">
+                <div id="member-search-box" style="display: flex; gap: 5px;">
+                    <input type="text" id="memberPhone" placeholder="เบอร์โทรสมาชิก..." style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #444; background: #0f111a; color: white;">
+                    <button onclick="checkMember()" style="background: #f1c40f; color: black; border: none; border-radius: 6px; padding: 5px 15px; cursor: pointer; font-weight: bold;">ค้นหา</button>
+                    <button onclick="openRegisterMemberModal()" style="background: #2ecc71; color: white; border: none; border-radius: 6px; padding: 5px 15px; cursor: pointer; font-weight: bold;">+ สมัคร</button>
+                </div>
+                <div id="member-info-box" style="display: none; justify-content: space-between; align-items: center;">
+                    <div style="color: #00d4ff;">
+                        <b id="display-member-name" style="font-size: 15px;"></b><br>
+                        <small style="color: #aaa;">แต้มสะสม: <span id="display-member-points" style="color: #f1c40f; font-weight: bold; font-size: 14px;"></span> แต้ม</small>
+                    </div>
+                    <div style="display: flex; gap: 5px; flex-direction: column; align-items: flex-end;">
+                        <button onclick="usePoints()" id="btn-use-points" style="background: #3498db; color: white; border: none; border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 11px;">ใช้แต้มเป็นส่วนลด</button>
+                        <button onclick="removeMember()" style="background: #e74c3c; color: white; border: none; border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 10px;">นำออก</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div id="order-items" style="height: 250px; overflow-y: auto; margin-bottom: 15px; padding-right: 5px;"></div>
@@ -718,11 +973,15 @@ require 'config.php';
             <div class="summary-line" style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:14px; color:#ff4d4d;">
                 <span>Discount <small id="summary-ispercent"></small>:</span> <span id="summary-discount">- ฿0.00</span>
             </div>
+            <div id="promo-messages-container" style="font-size:14px;"></div>
             <div class="summary-line" style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:14px; color:#bbb;">
                 <span>Service Charge (10%):</span> <span id="summary-sc">฿0.00</span>
             </div>
             <div class="summary-line" style="display:flex; justify-content:space-between; margin-bottom:10px; font-size:14px; color:#bbb;">
                 <span>VAT (7%):</span> <span id="summary-tax">฿0.00</span>
+            </div>
+            <div class="summary-line" id="line-points-discount" style="display:none; justify-content:space-between; margin-bottom:10px; font-size:14px; color:#f1c40f;">
+                <span>ส่วนลดจากแต้ม (Points):</span> <span id="summary-points-discount">- ฿0.00</span>
             </div>
             <div class="total-line" style="display:flex; justify-content:space-between; border-top: 1px dashed #333; padding-top: 10px; margin-top: 5px;">
                 <span style="font-size:18px; font-weight:bold; color:#fff;">NET TOTAL:</span>
@@ -945,23 +1204,48 @@ require 'config.php';
     </div>
 </div>
 
+<!-- Modal สำหรับสมัครสมาชิกใหม่ -->
+<div id="registerMemberModal" class="modal-overlay">
+    <div class="modal-box" style="border-color: #2ecc71;">
+        <div class="modal-header">
+            <h3 style="color: #2ecc71;">👤 สมัครสมาชิกใหม่</h3>
+        </div>
+        <div class="modal-body">
+            <div class="input-group">
+                <label style="color: #a0a0a0;">เบอร์โทรศัพท์:</label>
+                <input type="text" id="regMemberPhone" placeholder="08xxxxxxxx" maxlength="10" style="background: #0f111a; border: 1px solid #333; color: white;">
+            </div>
+            <div class="input-group">
+                <label style="color: #a0a0a0;">ชื่อลูกค้า:</label>
+                <input type="text" id="regMemberName" placeholder="ชื่อ-นามสกุล หรือชื่อเล่น" style="background: #0f111a; border: 1px solid #333; color: white;">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button onclick="document.getElementById('registerMemberModal').style.display='none'" class="btn-cancel">ยกเลิก</button>
+            <button onclick="submitRegisterMember()" class="btn-save" style="background:#2ecc71;">สมัครสมาชิก</button>
+        </div>
+    </div>
+</div>
+
 <style>
     body { font-family: 'Sarabun', sans-serif; background: #0f111a; color: white; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-    .pos-container { display: flex; gap: 20px; width: 100%; max-width: 1200px; }
-    .categories button { padding: 15px; margin: 5px; font-size: 16px; cursor: pointer; }
-    .bill-summary { background: #1a1d29; border-radius: 15px; padding: 20px; width: 400px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .pos-container { display: flex; gap: 20px; width: 100%; max-width: 1300px; align-items: flex-start; }
+    
+    .category-sidebar { display: flex; flex-direction: column; gap: 10px; width: 180px; flex-shrink: 0; }
+    .category-sidebar button { padding: 15px; font-size: 15px; cursor: pointer; border-radius: 8px; border: none; background: #252a3a; color: white; text-align: left; transition: 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    .category-sidebar button:hover { background: #00d4ff; color: black; font-weight: bold; transform: translateX(5px); }
+    
+    .product-area { flex: 1; }
+    .bill-summary { background: #1a1d29; border-radius: 15px; padding: 20px; width: 400px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); flex-shrink: 0; }
     .controls button { margin: 2px; font-size: 12px; }
 
     .product-grid { 
         display: grid; 
-        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); 
-        gap: 10px; 
-        margin-top: 20px; 
-        border-top: 1px solid #333; 
-        padding-top: 20px; 
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); 
+        gap: 15px; 
     }
     .product-btn { 
-        background: #252a3a; color: white; border: 1px solid #444; padding: 20px 10px; border-radius: 10px; cursor: pointer; text-align: center;
+        background: #252a3a; color: white; border: 1px solid #444; padding: 25px 15px; border-radius: 12px; cursor: pointer; text-align: center; transition: 0.2s;
     }
     .product-btn:hover { border-color: #00d4ff; background: #2d3446; }
 
@@ -983,10 +1267,16 @@ require 'config.php';
         padding: 25px;
         border-radius: 15px;
         width: 350px;
+        max-height: 85vh;
+        overflow-y: auto;
         box-shadow: 0 10px 40px rgba(0,0,0,0.6);
         border: 1px solid #333;
         animation: fadeIn 0.3s ease;
     }
+    .modal-box::-webkit-scrollbar { width: 6px; }
+    .modal-box::-webkit-scrollbar-track { background: #1a1d29; border-radius: 10px; }
+    .modal-box::-webkit-scrollbar-thumb { background: #444; border-radius: 10px; }
+    .modal-box::-webkit-scrollbar-thumb:hover { background: #00d4ff; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
     
     .modal-header h3 { margin-top: 0; color: #333; text-align: center; }

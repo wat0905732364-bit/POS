@@ -33,6 +33,7 @@ while($item = $items_result->fetch_assoc()) {
 
 // คำนวณยอดต่างๆ (อ้างอิงจากยอดรวมใน DB หรือคำนวณใหม่ตามมาตรฐาน)
 $discount_amt = floatval($order['discount_amount'] ?? 0);
+$promo_amount = floatval($order['promo_amount'] ?? 0);
 $is_percent   = (isset($order['is_percent']) && (int)$order['is_percent'] == 1);
 
 // คำนวณ Service Charge (เช็คทั้ง snake_case และ camelCase ที่อาจเกิดขึ้นจากโค้ดเก่า)
@@ -44,7 +45,9 @@ $has_tax = (isset($order['apply_tax']) && (int)$order['apply_tax'] == 1) || (iss
 $tax     = $has_tax ? (($subtotal + $sc) * 0.07) : 0;
 
 $discount = ($is_percent ? ($subtotal * ($discount_amt / 100)) : $discount_amt);
-$total = max(0, ($subtotal + $sc + $tax) - $discount);
+
+$points_used = isset($order['points_used']) ? floatval($order['points_used']) : 0;
+$total = max(0, ($subtotal + $sc + $tax) - $discount - $promo_amount - $points_used);
 ?>
 
 <!DOCTYPE html>
@@ -114,8 +117,14 @@ $total = max(0, ($subtotal + $sc + $tax) - $discount);
         <div class="totals">
             <div class="total-row"><span>Subtotal</span><span><?php echo number_format($subtotal, 2); ?></span></div>
             <div class="total-row"><span>Discount</span><span>-<?php echo number_format($discount, 2); ?></span></div>
+            <?php if($promo_amount > 0): ?>
+            <div class="total-row"><span>Promo Discount</span><span>-<?php echo number_format($promo_amount, 2); ?></span></div>
+            <?php endif; ?>
             <div class="total-row"><span>Service Charge (10%)</span><span><?php echo number_format($sc, 2); ?></span></div>
             <div class="total-row"><span>VAT (7%)</span><span><?php echo number_format($tax, 2); ?></span></div>
+            <?php if($points_used > 0): ?>
+            <div class="total-row"><span>Points Discount</span><span>-<?php echo number_format($points_used, 2); ?></span></div>
+            <?php endif; ?>
             <div class="total-row grand-total"><span>TOTAL</span><span><?php echo number_format($total, 2); ?></span></div>
         </div>
 
