@@ -1,5 +1,14 @@
 <?php
 require 'config.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit;
+}
+if ($_SESSION['role'] !== 'manager' && $_SESSION['role'] !== 'admin') {
+    echo "<script>alert('❌ เฉพาะผู้จัดการเท่านั้นที่สามารถเข้าหน้านี้ได้'); window.location.href='index.php';</script>";
+    exit;
+}
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -52,6 +61,13 @@ require 'config.php';
             const type = document.getElementById('promo_type').value;
             document.getElementById('div_percent').style.display = type === 'discount_percent' ? 'block' : 'none';
             document.getElementById('div_bogo').style.display = type === 'buy_x_get_y' ? 'block' : 'none';
+        }
+
+        async function refreshTableData() {
+            const response = await fetch(window.location.href);
+            const text = await response.text();
+            const doc = new DOMParser().parseFromString(text, 'text/html');
+            document.getElementById('promo-table-container').innerHTML = doc.getElementById('promo-table-container').innerHTML;
         }
 
         // ดึงรายการสินค้าตามหมวดหมู่มาใส่ใน Dropdown
@@ -109,7 +125,7 @@ require 'config.php';
             formData.append('action', 'delete_promotion');
             formData.append('id', id);
             await fetch('pos_action.php', { method: 'POST', body: formData });
-            location.reload();
+            await refreshTableData();
         }
 
         async function openAddModal() {
@@ -153,8 +169,8 @@ require 'config.php';
                 try {
                     const result = JSON.parse(text);
                     if (result.success) {
-                        alert('บันทึกสำเร็จ');
-                        location.reload();
+                        closePromoModal();
+                        await refreshTableData();
                     } else {
                         alert('เกิดข้อผิดพลาดจากฐานข้อมูล: ' + result.error);
                     }
@@ -174,10 +190,13 @@ require 'config.php';
         <div class="nav-bar">
             <h2 style="margin:0; color:#00d4ff;">BAR POS</h2>
             <div class="nav-links">
-                <a href="index.php">หน้าขาย (POS)</a>
-                <a href="sales_report.php">รายงานยอดขาย</a>
-                <a href="stock_report.php">จัดการสต็อก</a>
-                <a href="promotions.php" class="active">โปรโมชั่น</a>
+                <a href="index.php">หน้าขาย</a>
+                <a href="sales_report.php">รายงาน</a>
+                <a href="dashboard.php">แดชบอร์ดจัดการ</a>
+            </div>
+            <div style="display: flex; align-items: center; gap: 15px; color: #aaa; font-size: 14px;">
+                <span>👤 <?php echo htmlspecialchars($_SESSION['name']); ?></span>
+                <a href="logout.php" style="background: #e74c3c; color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 13px; transition: 0.2s;">ออกจากระบบ</a>
             </div>
         </div>
 
@@ -186,7 +205,7 @@ require 'config.php';
             <button class="btn-add-main" onclick="openAddModal()">+ สร้างโปรโมชั่น</button>
         </div>
 
-        <div class="card">
+        <div class="card" id="promo-table-container">
             <table>
                 <thead>
                     <tr>
@@ -271,6 +290,14 @@ require 'config.php';
                         <option value="Wine">Wine</option>
                         <option value="Liquor">Liquor</option>
                         <option value="Food">Food</option>
+                        <?php
+                        $cat_res = $conn->query("SELECT DISTINCT category FROM products WHERE category NOT IN ('Beer','Wine','Cocktail','Food','Liquor') AND category IS NOT NULL AND category != '' ORDER BY category ASC");
+                        if($cat_res) {
+                            while($c = $cat_res->fetch_assoc()) {
+                                echo "<option value='".htmlspecialchars($c['category'])."'>".htmlspecialchars($c['category'])."</option>\n";
+                            }
+                        }
+                        ?>
                     </select>
                 </div>
                 

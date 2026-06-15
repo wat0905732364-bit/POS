@@ -54,7 +54,7 @@ $total = max(0, ($subtotal + $sc + $tax) - $discount - $promo_amount - $points_u
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Invoice #<?php echo $order['id']; ?></title>
+    <title>Invoice #<?php echo htmlspecialchars($order['receipt_no'] ?? $order['id']); ?></title>
     <style>
         body { font-family: 'Sarabun', sans-serif; display: flex; justify-content: center; background: #f5f5f5; padding: 20px; margin: 0; }
         .receipt { background: white; width: 80mm; padding: 10mm 5mm; box-shadow: 0 0 10px rgba(0,0,0,0.1); color: #000; }
@@ -86,8 +86,11 @@ $total = max(0, ($subtotal + $sc + $tax) - $discount - $promo_amount - $points_u
 
         <div class="info">
             <div><strong>โต๊ะ: <?php echo htmlspecialchars($order['table_number']); ?></strong></div>
-            <div>เลขที่บิล: #<?php echo $order['id']; ?></div>
+            <div>เลขที่บิล: #<?php echo htmlspecialchars($order['receipt_no'] ?? $order['id']); ?></div>
             <div>วันที่: <?php echo date('d/m/Y H:i', strtotime($order['created_at'])); ?></div>
+            <?php if (!empty($order['cashier_name'])): ?>
+            <div>พนักงาน: <?php echo htmlspecialchars($order['cashier_name']); ?></div>
+            <?php endif; ?>
         </div>
 
         <table class="items">

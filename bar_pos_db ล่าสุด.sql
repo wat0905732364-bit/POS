@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost
--- Generation Time: Jun 13, 2026 at 06:16 PM
+-- Generation Time: Jun 15, 2026 at 05:25 PM
 -- Server version: 10.4.28-MariaDB
 -- PHP Version: 8.2.4
 
@@ -50,7 +50,9 @@ INSERT INTO `members` (`id`, `phone`, `name`, `points`, `created_at`) VALUES
 
 CREATE TABLE `orders` (
   `id` int(11) NOT NULL,
+  `receipt_no` varchar(20) DEFAULT NULL,
   `table_number` varchar(10) DEFAULT NULL,
+  `cashier_name` varchar(100) DEFAULT NULL,
   `member_id` int(11) DEFAULT NULL,
   `total_amount` decimal(10,2) DEFAULT 0.00,
   `discount_amount` decimal(10,2) DEFAULT 0.00,
@@ -68,41 +70,47 @@ CREATE TABLE `orders` (
 -- Dumping data for table `orders`
 --
 
-INSERT INTO `orders` (`id`, `table_number`, `member_id`, `total_amount`, `discount_amount`, `promo_amount`, `points_earned`, `points_used`, `is_percent`, `status`, `created_at`, `apply_tax`, `apply_sc`) VALUES
-(8, 'A1', NULL, 517.88, 0.00, 0.00, 0, 0, 1, 'paid', '2026-05-31 16:35:57', 0, 0),
-(9, 'A1', NULL, 1918.51, 0.00, 0.00, 0, 0, 1, 'paid', '2026-05-31 16:36:11', 0, 0),
-(10, 'A2', NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 16:48:41', 0, 0),
-(11, 'A1', NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 16:58:27', 0, 0),
-(12, 'A3', NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 16:58:49', 0, 0),
-(13, 'A1', NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 16:59:00', 0, 0),
-(14, 'A1', NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 17:03:20', 0, 0),
-(15, 'A1', NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 17:03:30', 0, 0),
-(16, 'A1', NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-06-02 15:13:26', 0, 0),
-(17, 'A5', NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-06-02 15:30:47', 0, 0),
-(18, 'A4', NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-06-02 15:36:03', 0, 0),
-(19, 'A6', NULL, 522.00, 10.00, 0.00, 0, 0, 1, 'paid', '2026-06-05 15:35:09', 0, 0),
-(20, 'A6', NULL, 918.06, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-05 15:38:59', 1, 1),
-(21, 'A3', NULL, 847.44, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-07 15:25:46', 1, 1),
-(22, 'A8', NULL, 1023.99, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 11:51:30', 1, 1),
-(23, 'A10', NULL, 1706.65, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:20:05', 1, 1),
-(24, 'A20', NULL, 2236.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:48:19', 1, 1),
-(25, 'A1', NULL, 682.66, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:49:33', 1, 1),
-(26, 'A3', NULL, 2342.23, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:52:19', 1, 1),
-(27, 'A3', NULL, 1023.99, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:52:41', 1, 1),
-(28, 'A8', NULL, 4590.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 13:01:13', 1, 1),
-(29, 'A6', NULL, 4590.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 13:02:58', 1, 1),
-(30, 'A3', NULL, 4590.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 13:07:04', 1, 1),
-(31, 'A9', NULL, 4590.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 13:08:30', 1, 1),
-(32, 'G01', 1, 45903.00, 0.00, 0.00, 459, 0, 1, 'paid', '2026-06-12 15:44:17', 1, 1),
-(33, 'A20', NULL, 400.18, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 13:14:07', 1, 1),
-(34, 'A09', NULL, 2236.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 13:32:42', 1, 1),
-(35, 'A99', NULL, 2236.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 15:40:51', 1, 1),
-(36, 'A1', NULL, 800.36, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 15:52:48', 1, 1),
-(37, 'A87', NULL, 8803.96, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:08:38', 1, 1),
-(38, 'A99', NULL, 682.66, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:10:17', 1, 1),
-(39, 'A43', NULL, 341.33, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:11:14', 1, 1),
-(40, 'A22', NULL, 1706.65, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:11:40', 1, 1),
-(41, 'A44', NULL, 1706.65, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:13:50', 1, 1);
+INSERT INTO `orders` (`id`, `receipt_no`, `table_number`, `cashier_name`, `member_id`, `total_amount`, `discount_amount`, `promo_amount`, `points_earned`, `points_used`, `is_percent`, `status`, `created_at`, `apply_tax`, `apply_sc`) VALUES
+(8, NULL, 'A1', NULL, NULL, 517.88, 0.00, 0.00, 0, 0, 1, 'paid', '2026-05-31 16:35:57', 0, 0),
+(9, NULL, 'A1', NULL, NULL, 1918.51, 0.00, 0.00, 0, 0, 1, 'paid', '2026-05-31 16:36:11', 0, 0),
+(10, NULL, 'A2', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 16:48:41', 0, 0),
+(11, NULL, 'A1', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 16:58:27', 0, 0),
+(12, NULL, 'A3', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 16:58:49', 0, 0),
+(13, NULL, 'A1', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 16:59:00', 0, 0),
+(14, NULL, 'A1', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 17:03:20', 0, 0),
+(15, NULL, 'A1', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-05-31 17:03:30', 0, 0),
+(16, NULL, 'A1', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-06-02 15:13:26', 0, 0),
+(17, NULL, 'A5', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-06-02 15:30:47', 0, 0),
+(18, NULL, 'A4', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-06-02 15:36:03', 0, 0),
+(19, NULL, 'A6', NULL, NULL, 522.00, 10.00, 0.00, 0, 0, 1, 'paid', '2026-06-05 15:35:09', 0, 0),
+(20, NULL, 'A6', NULL, NULL, 918.06, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-05 15:38:59', 1, 1),
+(21, NULL, 'A3', NULL, NULL, 847.44, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-07 15:25:46', 1, 1),
+(22, NULL, 'A8', NULL, NULL, 1023.99, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 11:51:30', 1, 1),
+(23, NULL, 'A10', NULL, NULL, 1706.65, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:20:05', 1, 1),
+(24, NULL, 'A20', NULL, NULL, 2236.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:48:19', 1, 1),
+(25, NULL, 'A1', NULL, NULL, 682.66, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:49:33', 1, 1),
+(26, NULL, 'A3', NULL, NULL, 2342.23, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:52:19', 1, 1),
+(27, NULL, 'A3', NULL, NULL, 1023.99, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 12:52:41', 1, 1),
+(28, NULL, 'A8', NULL, NULL, 4590.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 13:01:13', 1, 1),
+(29, NULL, 'A6', NULL, NULL, 4590.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 13:02:58', 1, 1),
+(30, NULL, 'A3', NULL, NULL, 4590.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 13:07:04', 1, 1),
+(31, NULL, 'A9', NULL, NULL, 4590.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-12 13:08:30', 1, 1),
+(32, NULL, 'G01', NULL, 1, 45903.00, 0.00, 0.00, 459, 0, 1, 'paid', '2026-06-12 15:44:17', 1, 1),
+(33, NULL, 'A20', NULL, NULL, 400.18, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 13:14:07', 1, 1),
+(34, NULL, 'A09', NULL, NULL, 2236.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 13:32:42', 1, 1),
+(35, NULL, 'A99', NULL, NULL, 2236.30, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 15:40:51', 1, 1),
+(36, NULL, 'A1', NULL, NULL, 800.36, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 15:52:48', 1, 1),
+(37, NULL, 'A87', NULL, NULL, 8803.96, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:08:38', 1, 1),
+(38, NULL, 'A99', NULL, NULL, 682.66, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:10:17', 1, 1),
+(39, NULL, 'A43', NULL, NULL, 341.33, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:11:14', 1, 1),
+(40, NULL, 'A22', NULL, NULL, 1706.65, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:11:40', 1, 1),
+(41, NULL, 'A44', NULL, NULL, 1706.65, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-13 16:13:50', 1, 1),
+(42, 'INV-260615-001', 'A3', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-06-15 12:07:13', 1, 1),
+(43, 'INV-260615-002', 'A12', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'voided', '2026-06-15 12:11:09', 1, 1),
+(44, '003', 'A21', 'นพ', NULL, 2342.23, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-15 12:16:28', 1, 1),
+(45, '004', 'A55', 'ผู้จัดการร้าน', NULL, 341.33, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-15 14:33:54', 1, 1),
+(46, '005', 'H7', 'ผู้จัดการร้าน', NULL, 459.03, 0.00, 0.00, 0, 0, 1, 'paid', '2026-06-15 14:39:22', 1, 1),
+(47, '006', 'A1', NULL, NULL, 0.00, 0.00, 0.00, 0, 0, 1, 'active', '2026-06-15 14:58:57', 1, 1);
 
 -- --------------------------------------------------------
 
@@ -272,7 +280,10 @@ INSERT INTO `order_items` (`id`, `order_id`, `item_name`, `price`, `item_discoun
 (262, 41, 'wine iurow (แก้ว)', 290.00, 0.00, 1, 'active', NULL),
 (263, 41, 'wine iurow (แก้ว)', 290.00, 0.00, 1, 'active', NULL),
 (264, 41, 'wine iurow (แก้ว)', 290.00, 0.00, 1, 'active', NULL),
-(265, 41, 'wine iurow (แก้ว)', 290.00, 0.00, 1, 'active', NULL);
+(265, 41, 'wine iurow (แก้ว)', 290.00, 0.00, 1, 'active', NULL),
+(270, 44, 'Wlihe wine', 1990.00, 0.00, 1, 'active', NULL),
+(272, 45, 'wine iurow (แก้ว)', 290.00, 0.00, 1, 'active', NULL),
+(273, 46, 'mojito', 390.00, 0.00, 1, 'active', NULL);
 
 -- --------------------------------------------------------
 
@@ -297,18 +308,16 @@ CREATE TABLE `products` (
 --
 
 INSERT INTO `products` (`id`, `name`, `price`, `category`, `stock_qty`, `ml_per_unit`, `inventory_id`, `show_on_pos`, `open_ml`) VALUES
-(1, 'ข้าวแกงกระหรี่', 189.00, 'Food', 0, 0, NULL, 1, 0),
-(3, 'sing (แก้วเล็ก)', 89.00, 'Beer', 0, 100, 59, 1, 0),
-(4, 'sing (แก้วใหญ่)', 170.00, 'Beer', 0, 250, 59, 1, 0),
-(5, 'sing (ขวด)', 220.00, 'Beer', 0, 0, NULL, 1, 0),
-(6, 'wine red (แก้ว)', 390.00, 'Wine', 0, 0, NULL, 1, 0),
-(7, 'wine red (ขวด)', 1800.00, 'Wine', 0, 0, NULL, 1, 0),
-(8, 'banana (แก้ว)', 390.00, 'Cocktail', 0, 0, NULL, 1, 0),
-(49, 'Wlihe wine', 1990.00, 'Wine', 6, 650, NULL, 1, 0),
-(50, 'wine iurow (แก้ว)', 290.00, 'Wine', 0, 65, 49, 1, 0),
-(52, 'wine green', 3900.00, 'Wine', 5, 750, NULL, 1, 0),
-(53, 'wine jj (ขวด)', 3900.00, 'Wine', 0, 0, 49, 1, 0),
-(59, 'SING(ถัง)', 190.00, 'Beer', 1, 0, NULL, 0, 1000);
+(1, 'ข้าวแกงกระหรี่', 189.00, 'FOOD', 0, 0, NULL, 1, 0),
+(3, 'sing (แก้วเล็ก)', 89.00, 'BEER', 0, 100, 59, 1, 0),
+(4, 'sing (แก้วใหญ่)', 170.00, 'BEER', 0, 250, 59, 1, 0),
+(49, 'Wlihe wine', 1990.00, 'WINE', 4, 650, NULL, 1, 585),
+(50, 'wine iurow (แก้ว)', 290.00, 'WINE', 0, 65, 49, 1, 0),
+(52, 'wine green', 3900.00, 'WINE', 5, 750, NULL, 1, 0),
+(53, 'wine jj (ขวด)', 3900.00, 'WINE', 0, 0, 49, 1, 0),
+(59, 'SING(ถัง)', 190.00, 'BEER', 1, 0, NULL, 0, 1000),
+(60, 'Gintonic', 999.00, 'GINTONIC', 9, 750, NULL, 1, 705),
+(61, 'mojito', 390.00, 'GINTONIC', 0, 45, 60, 1, 0);
 
 -- --------------------------------------------------------
 
@@ -335,7 +344,8 @@ CREATE TABLE `promotions` (
 --
 
 INSERT INTO `promotions` (`id`, `name`, `promo_type`, `target_category`, `target_item`, `condition_qty`, `reward_qty`, `discount_percent`, `start_time`, `end_time`, `is_active`) VALUES
-(1, 'HappyHose', 'buy_x_get_y', 'Beer', NULL, 2, 1, 0.00, '17:00:00', '22:00:00', 1);
+(1, 'HappyHose', 'buy_x_get_y', 'Beer', NULL, 2, 1, 0.00, '17:00:00', '22:00:00', 1),
+(2, 'Mojito', 'buy_x_get_y', 'GINTONIC', '[\"mojito\"]', 2, 1, 0.00, '17:00:00', '02:00:00', 1);
 
 -- --------------------------------------------------------
 
@@ -384,7 +394,36 @@ INSERT INTO `stock_logs` (`id`, `product_id`, `qty_change`, `unit`, `type`, `cre
 (31, 49, -65, 'ml', 'sale', '2026-06-13 16:11:21'),
 (32, 49, -1, 'unit', 'sale', '2026-06-13 16:11:44'),
 (33, 49, -325, 'ml', 'sale', '2026-06-13 16:11:49'),
-(34, 49, -325, 'ml', 'sale', '2026-06-13 16:14:00');
+(34, 49, -325, 'ml', 'sale', '2026-06-13 16:14:00'),
+(35, 49, -1, 'unit', 'sale', '2026-06-15 12:30:24'),
+(36, 49, -1, 'unit', 'sale', '2026-06-15 14:34:04'),
+(37, 49, -65, 'ml', 'sale', '2026-06-15 14:34:57'),
+(38, 60, 10, 'unit', 'restock', '2026-06-15 14:37:28'),
+(39, 60, -1, 'unit', 'sale', '2026-06-15 14:39:26'),
+(40, 60, -45, 'ml', 'sale', '2026-06-15 14:39:30');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `users`
+--
+
+CREATE TABLE `users` (
+  `id` int(11) NOT NULL,
+  `username` varchar(50) NOT NULL,
+  `password` varchar(255) NOT NULL,
+  `role` enum('cashier','manager') NOT NULL DEFAULT 'cashier',
+  `name` varchar(100) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `users`
+--
+
+INSERT INTO `users` (`id`, `username`, `password`, `role`, `name`) VALUES
+(1, 'admin', '$2y$10$0xzuoMS6h.bcEdAJ1HYIX..NOV2xLvL9A8JlcburOFNuTe.M8fVei', 'manager', 'ผู้จัดการร้าน'),
+(2, 'staff', '$2y$10$.g.50tzq5HPmkqBlOKgLo.ut6prNFbh71ZrP3Gtffbd6JEMQ0mr1y', 'cashier', 'พนักงานขาย (แคชเชียร์)'),
+(3, 'nop', '$2y$10$AK99qm5wCjJoRvbkijJ0BeUqfJwT90gDaZX6mXFOAdzjo/AZFs.NO', 'cashier', 'นพ');
 
 --
 -- Indexes for dumped tables
@@ -429,6 +468,13 @@ ALTER TABLE `stock_logs`
   ADD PRIMARY KEY (`id`);
 
 --
+-- Indexes for table `users`
+--
+ALTER TABLE `users`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `username` (`username`);
+
+--
 -- AUTO_INCREMENT for dumped tables
 --
 
@@ -442,31 +488,37 @@ ALTER TABLE `members`
 -- AUTO_INCREMENT for table `orders`
 --
 ALTER TABLE `orders`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=42;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=48;
 
 --
 -- AUTO_INCREMENT for table `order_items`
 --
 ALTER TABLE `order_items`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=266;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=289;
 
 --
 -- AUTO_INCREMENT for table `products`
 --
 ALTER TABLE `products`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=60;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=62;
 
 --
 -- AUTO_INCREMENT for table `promotions`
 --
 ALTER TABLE `promotions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `stock_logs`
 --
 ALTER TABLE `stock_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=35;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=41;
+
+--
+-- AUTO_INCREMENT for table `users`
+--
+ALTER TABLE `users`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- Constraints for dumped tables

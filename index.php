@@ -1,5 +1,9 @@
 <?php
 require 'config.php';
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit;
+}
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -12,6 +16,7 @@ require 'config.php';
 <script>
     let currentOrder = {
         id: null,
+        receipt_no: null,
         table: '',
         items: [],
         subtotal: 0,
@@ -414,7 +419,7 @@ require 'config.php';
         let total = Math.max(0, totalBeforePoints - pointsDiscount);
 
         document.getElementById('table-display').innerText = currentOrder.table || '--';
-        document.getElementById('order-id-display').innerText = currentOrder.id || '--';
+        document.getElementById('order-id-display').innerText = currentOrder.receipt_no ? currentOrder.receipt_no : (currentOrder.id ? currentOrder.id : '--');
         
         // อัปเดตตัวเลขสรุปผล
         document.getElementById('summary-subtotal').innerText = '฿' + subtotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -694,6 +699,19 @@ require 'config.php';
         } catch (e) { console.error("Item discount error:", e); }
     }
 
+    function resetCurrentOrder() {
+        currentOrderId = null;
+        currentOrder.id = null;
+        currentOrder.receipt_no = null;
+        currentOrder.table = '';
+        currentOrder.items = [];
+        currentOrder.discount = 0;
+        currentOrder.isPercent = true;
+        currentOrder.applyTax = true;
+        currentOrder.applySC = true;
+        removeMember(); // รีเซ็ตสมาชิกและอัปเดตหน้าจออัตโนมัติ
+    }
+
     async function voidAll(orderId) { 
         if(!confirm('ยืนยันการยกเลิกบิล?')) return;
         
@@ -704,7 +722,8 @@ require 'config.php';
         const response = await fetch('pos_action.php', { method: 'POST', body: formData });
         const result = await response.json();
         if(result.success) {
-            location.reload();
+            resetCurrentOrder();
+            loadActiveOrders();
         }
     }
 
@@ -734,6 +753,7 @@ require 'config.php';
         formData.append('total', totalBeforePoints);
         formData.append('discount', currentOrder.discount);
         formData.append('promo_amount', promoDiscount);
+        formData.append('is_percent', currentOrder.isPercent ? 1 : 0);
         formData.append('apply_sc', currentOrder.applySC ? 1 : 0);
         formData.append('apply_tax', currentOrder.applyTax ? 1 : 0);
         
@@ -747,7 +767,8 @@ require 'config.php';
             const result = await response.json();
             if (result.success) {
                 alert("ชำระเงินสำเร็จ! บิลถูกบันทึกเรียบร้อย");
-                location.reload(); // รีโหลดเพื่อเคลียร์คิวบิล
+                resetCurrentOrder();
+                loadActiveOrders(); // โหลดรายการคิวบิลใหม่
             }
         } catch (error) {
             console.error("Checkout Error:", error);
@@ -829,7 +850,7 @@ require 'config.php';
             
             orders.forEach(order => {
                 const btn = document.createElement('button');
-                btn.innerText = 'โต๊ะ ' + (order.table_number || '-') + ' (#' + order.id + ')';
+                btn.innerText = 'โต๊ะ ' + (order.table_number || '-') + ' (#' + (order.receipt_no || order.id) + ')';
                 btn.className = (order.id == currentOrderId) ? 'order-tab active' : 'order-tab';
                 btn.onclick = () => switchOrder(order.id);
                 container.appendChild(btn);
@@ -850,6 +871,7 @@ require 'config.php';
         const data = await response.json();
         
         currentOrder.id = orderId;
+        currentOrder.receipt_no = data.order_info ? data.order_info.receipt_no : null;
         currentOrder.table = data.order_info ? data.order_info.table_number : '--';
         currentOrder.applyTax = data.order_info ? (parseInt(data.order_info.apply_tax) === 1) : true;
         currentOrder.applySC = data.order_info ? (parseInt(data.order_info.apply_sc) === 1) : true;
@@ -890,14 +912,19 @@ require 'config.php';
 </script>
 
 <!-- ส่วนเมนูนำทาง (Navbar) -->
-<div style="width: 100%; max-width: 1300px; display: flex; justify-content: space-between; align-items: center; margin: 0 auto 10px auto; padding: 10px 0;">
+<div style="width: 100%; max-width: 1300px; display: flex; justify-content: space-between; align-items: center; margin: 0 auto 10px auto; padding: 10px 0; border-bottom: 1px solid #333;">
     <h1 style="color: #00d4ff; margin: 0;">FROG POS</h1>
     <nav>
         <a href="index.php" style="color: #00d4ff; text-decoration: none; font-weight: bold; margin-left: 20px;">หน้าขาย (POS)</a>
-        <a href="sales_report.php" style="color: white; text-decoration: none; margin-left: 20px;">รายงานยอดขาย</a>
-        <a href="stock_report.php" style="color: white; text-decoration: none; margin-left: 20px;">จัดการสต็อก</a>
-        <a href="promotions.php" style="color: white; text-decoration: none; margin-left: 20px;">โปรโมชั่น</a>
+        <?php if($_SESSION['role'] === 'manager' || $_SESSION['role'] === 'admin'): ?>
+            <a href="sales_report.php" style="color: white; text-decoration: none; margin-left: 20px;">รายงานยอดขาย</a>
+            <a href="dashboard.php" style="color: white; text-decoration: none; margin-left: 20px;">แดชบอร์ดจัดการ</a>
+        <?php endif; ?>
     </nav>
+    <div style="display: flex; align-items: center; gap: 15px; color: #aaa; font-size: 14px;">
+        <span>👤 <?php echo htmlspecialchars($_SESSION['name']); ?> (<?php echo $_SESSION['role'] === 'manager' ? 'ผู้จัดการ' : 'แคชเชียร์'; ?>)</span>
+        <a href="logout.php" style="background: #e74c3c; color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 13px; transition: 0.2s;">ออกจากระบบ</a>
+    </div>
 </div>
 
 <!-- ส่วนแสดงรายการบิลที่ค้างอยู่ -->
@@ -917,16 +944,14 @@ require 'config.php';
         
         <?php
         // ดึงหมวดหมู่ทั้งหมดที่มีในระบบมาสร้างเป็นปุ่มโดยอัตโนมัติ
-        $cat_icons = ['Beer' => '🍺', 'Wine' => '🍷', 'Cocktail' => '🍸', 'Food' => '🍽️', 'Liquor' => '🥃'];
         $cat_res = $conn->query("SELECT DISTINCT category FROM products WHERE category IS NOT NULL AND category != '' ORDER BY category ASC");
         if ($cat_res && $cat_res->num_rows > 0) {
             while($c = $cat_res->fetch_assoc()) {
                 $catName = htmlspecialchars($c['category']);
-                $icon = isset($cat_icons[$catName]) ? $cat_icons[$catName] : '📂';
-                echo "<button onclick=\"loadProducts('$catName')\">$icon $catName</button>\n";
+                echo "<button onclick=\"loadProducts('$catName')\">$catName</button>\n";
             }
         } else {
-            echo '<button onclick="loadProducts(\'Beer\')">🍺 Beer</button>';
+            echo '<button onclick="loadProducts(\'Beer\')">Beer</button>';
         }
         ?>
         

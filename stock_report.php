@@ -1,6 +1,15 @@
 <?php
 require 'config.php';
 
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit;
+}
+if ($_SESSION['role'] !== 'manager' && $_SESSION['role'] !== 'admin') {
+    echo "<script>alert('❌ เฉพาะผู้จัดการเท่านั้นที่สามารถเข้าหน้านี้ได้'); window.location.href='index.php';</script>";
+    exit;
+}
+
 // อัพเดทฐานข้อมูลเพิ่ม column 'unit' อัตโนมัติ (เพื่อรองรับการบันทึก ml/ขวด แยกกัน)
 $chk = $conn->query("SHOW COLUMNS FROM stock_logs LIKE 'unit'");
 if ($chk && $chk->num_rows == 0) {
@@ -73,6 +82,15 @@ if ($chk && $chk->num_rows == 0) {
         .qty-out { color: var(--danger); font-weight: bold; }
     </style>
     <script>
+        // ฟังก์ชันอัปเดตตารางโดยไม่ต้องรีเฟรชหน้า
+        async function refreshTableData() {
+            const response = await fetch(window.location.href);
+            const text = await response.text();
+            const doc = new DOMParser().parseFromString(text, 'text/html');
+            document.getElementById('stock-table-container').innerHTML = doc.getElementById('stock-table-container').innerHTML;
+            document.getElementById('movement-table-container').innerHTML = doc.getElementById('movement-table-container').innerHTML;
+        }
+
         async function updateStock(productId, actionType = 'add') {
             const qtyInput = document.getElementById('qty-' + productId);
             let qty = parseInt(qtyInput.value);
@@ -94,8 +112,8 @@ if ($chk && $chk->num_rows == 0) {
                 const response = await fetch('pos_action.php', { method: 'POST', body: formData });
                 const result = await response.json();
                 if (result.success) {
-                    alert('อัปเดตสต็อกสำเร็จ');
-                    location.reload();
+                    qtyInput.value = '0';
+                    await refreshTableData();
                 } else {
                     alert('เกิดข้อผิดพลาด');
                 }
@@ -115,8 +133,7 @@ if ($chk && $chk->num_rows == 0) {
                 const response = await fetch('pos_action.php', { method: 'POST', body: formData });
                 const result = await response.json();
                 if (result.success) {
-                    alert('🗑️ ลบสินค้าเรียบร้อยแล้ว');
-                    location.reload();
+                    await refreshTableData();
                 } else {
                     alert('เกิดข้อผิดพลาด: ' + (result.error || ''));
                 }
@@ -143,8 +160,9 @@ if ($chk && $chk->num_rows == 0) {
                 const response = await fetch('pos_action.php', { method: 'POST', body: formData });
                 const result = await response.json();
                 if (result.success) {
-                    alert('เพิ่มสินค้าสำเร็จ');
-                    location.reload();
+                    closeAddModal();
+                    document.getElementById('addProductForm').reset();
+                    await refreshTableData();
                 } else {
                     alert('เกิดข้อผิดพลาดในการบันทึกข้อมูล');
                 }
@@ -181,8 +199,8 @@ if ($chk && $chk->num_rows == 0) {
                 const response = await fetch('pos_action.php', { method: 'POST', body: formData });
                 const result = await response.json();
                 if (result.success) {
-                    alert('แก้ไขสินค้าสำเร็จ');
-                    location.reload();
+                    closeEditModal();
+                    await refreshTableData();
                 } else {
                     alert('เกิดข้อผิดพลาด: ' + (result.error || ''));
                 }
@@ -239,10 +257,13 @@ if ($chk && $chk->num_rows == 0) {
         <div class="nav-bar">
             <h2 style="margin:0; color:var(--primary);">BAR POS</h2>
             <div class="nav-links">
-                <a href="index.php">หน้าขาย (POS)</a>
-                <a href="sales_report.php">รายงานยอดขาย</a>
-                <a href="stock_report.php" class="active">จัดการสต็อก</a>
-                <a href="promotions.php">โปรโมชั่น</a>
+                <a href="index.php">หน้าขาย</a>
+                <a href="sales_report.php">รายงาน</a>
+                <a href="dashboard.php">แดชบอร์ดจัดการ</a>
+            </div>
+            <div style="display: flex; align-items: center; gap: 15px; color: #aaa; font-size: 14px;">
+                <span>👤 <?php echo htmlspecialchars($_SESSION['name']); ?></span>
+                <a href="logout.php" style="background: #e74c3c; color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 13px; transition: 0.2s;">ออกจากระบบ</a>
             </div>
         </div>
 
@@ -255,7 +276,7 @@ if ($chk && $chk->num_rows == 0) {
             </div>
         </div>
         
-        <div class="card">
+        <div class="card" id="stock-table-container">
             <table>
             <thead>
                 <tr>
@@ -313,7 +334,8 @@ if ($chk && $chk->num_rows == 0) {
 
         <!-- ส่วนสรุปความเคลื่อนไหวรายวัน -->
         <h2>📈 ความเคลื่อนไหวสต็อกรายวัน (Daily Stock Movement)</h2>
-        <table>
+        <div id="movement-table-container">
+            <table>
             <thead>
                 <tr>
                     <th>วันที่</th>
@@ -345,7 +367,8 @@ if ($chk && $chk->num_rows == 0) {
                 }
                 ?>
             </tbody>
-        </table>
+            </table>
+        </div>
 
         <!-- Modal สำหรับเพิ่มสินค้าใหม่ -->
         <div id="addModal" class="modal-overlay">

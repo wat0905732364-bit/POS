@@ -227,9 +227,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    if ($_POST['action'] === 'get_daily_orders') {
+        $date = $_POST['date'];
+        $cashier = isset($_POST['cashier']) ? $_POST['cashier'] : '';
+        
+        $sql = "SELECT id, receipt_no, table_number, total_amount, created_at, cashier_name 
+                FROM orders 
+                WHERE DATE(created_at) = ? AND status = 'paid'";
+                
+        if ($cashier !== '') {
+            $sql .= " AND cashier_name = ?";
+            $sql .= " ORDER BY created_at DESC";
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param("ss", $date, $cashier);
+        } else {
+            $sql .= " ORDER BY created_at DESC";
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param("s", $date);
+        }
+        $stmt->execute();
+        
+        echo json_encode($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
+        exit;
+    }
+
     if ($_POST['action'] === 'get_active_orders') {
         try {
-            $sql = "SELECT id, table_number 
+            // ตรวจสอบและสร้างคอลัมน์ receipt_no อัตโนมัติ ป้องกัน Error ทันทีที่เปิดหน้าเว็บ
+            $chk_col = $conn->query("SHOW COLUMNS FROM orders LIKE 'receipt_no'");
+            if ($chk_col && $chk_col->num_rows == 0) {
+                $conn->query("ALTER TABLE orders ADD receipt_no VARCHAR(20) NULL AFTER id");
+            }
+
+            $sql = "SELECT id, receipt_no, table_number 
                     FROM orders 
                     WHERE status = 'active' 
                     ORDER BY table_number ASC, id DESC";
@@ -325,14 +355,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // ทุก 100 บาทที่จ่ายจริง ได้ 1 แต้ม
         $points_earned = $member_id ? floor($final_paid / 100) : 0;
         
-        $sql = "UPDATE orders SET status = 'paid', total_amount = ?, discount_amount = ?, promo_amount = ?, is_percent = ?, apply_sc = ?, apply_tax = ?";
+        // ตรวจสอบและสร้างคอลัมน์ cashier_name อัตโนมัติหากยังไม่มี
+        $chk_col_cashier = $conn->query("SHOW COLUMNS FROM orders LIKE 'cashier_name'");
+        if ($chk_col_cashier && $chk_col_cashier->num_rows == 0) {
+            $conn->query("ALTER TABLE orders ADD cashier_name VARCHAR(100) NULL AFTER table_number");
+        }
+        $cashier_name = isset($_SESSION['name']) ? $_SESSION['name'] : 'Unknown';
+
+        $sql = "UPDATE orders SET status = 'paid', total_amount = ?, discount_amount = ?, promo_amount = ?, is_percent = ?, apply_sc = ?, apply_tax = ?, cashier_name = ?";
         if ($member_id) {
             $sql .= ", member_id = $member_id, points_earned = $points_earned, points_used = $points_used";
         }
         $sql .= " WHERE id = ?";
         
         $stmt = $conn->prepare($sql);
-        $stmt->bind_param("dddiiii", $final_paid, $discount, $promo_amount, $is_percent, $apply_sc, $apply_tax, $order_id);
+        $stmt->bind_param("dddiiisi", $final_paid, $discount, $promo_amount, $is_percent, $apply_sc, $apply_tax, $cashier_name, $order_id);
         $result = $stmt->execute();
 
         if ($result) {
@@ -381,6 +418,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         echo json_encode(['success' => $result]);
+        exit;
+    }
+
+    // ---------------------------------
+    // ส่วนจัดการหมวดหมู่ (Categories)
+    // ---------------------------------
+    if ($_POST['action'] === 'save_category') {
+        $old_name = $_POST['old_category_name'];
+        $new_name = $_POST['new_category_name'];
+
+        if (empty($new_name)) {
+            echo json_encode(['success' => false, 'error' => 'ชื่อหมวดหมู่ห้ามว่าง']);
+            exit;
+        }
+
+        // ถ้ามี old_name แปลว่าเป็นการแก้ไข
+        if (!empty($old_name)) {
+            $stmt = $conn->prepare("UPDATE products SET category = ? WHERE category = ?");
+            $stmt->bind_param("ss", $new_name, $old_name);
+            echo json_encode(['success' => $stmt->execute()]);
+        }
+        // ถ้าไม่มี old_name ถือว่าเป็นการเพิ่มหมวดหมู่ใหม่ (ซึ่งจริงๆ ไม่ต้องทำอะไร เพราะหมวดหมู่จะถูกสร้างตอนเพิ่มสินค้า)
+        // แค่ส่งค่า success กลับไปเพื่อให้ Modal ปิด
+        else {
+            echo json_encode(['success' => true]);
+        }
+        exit;
+    }
+    if ($_POST['action'] === 'delete_category') {
+        $name = $_POST['category_name'];
+        $stmt = $conn->prepare("UPDATE products SET category = NULL WHERE category = ?");
+        $stmt->bind_param("s", $name);
+        echo json_encode(['success' => $stmt->execute()]);
+        exit;
+    }
+
+    // ---------------------------------
+    // ส่วนจัดการผู้ใช้งาน (Users / Staff)
+    // ---------------------------------
+    if ($_POST['action'] === 'change_password') {
+        $user_id = intval($_POST['user_id']);
+        $new_password = password_hash($_POST['new_password'], PASSWORD_DEFAULT);
+        
+        $stmt = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
+        $stmt->bind_param("si", $new_password, $user_id);
+        echo json_encode(['success' => $stmt->execute()]);
+        exit;
+    }
+
+    if ($_POST['action'] === 'add_user') {
+        $username = $_POST['username'];
+        $name = $_POST['name'];
+        $role = $_POST['role'];
+        $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+        
+        $stmt = $conn->prepare("INSERT INTO users (username, password, role, name) VALUES (?, ?, ?, ?)");
+        $stmt->bind_param("ssss", $username, $password, $role, $name);
+        echo json_encode(['success' => $stmt->execute(), 'error' => $conn->error]);
+        exit;
+    }
+
+    if ($_POST['action'] === 'delete_user') {
+        $user_id = intval($_POST['user_id']);
+        $stmt = $conn->prepare("DELETE FROM users WHERE id = ?");
+        $stmt->bind_param("i", $user_id);
+        echo json_encode(['success' => $stmt->execute()]);
         exit;
     }
 
@@ -446,12 +549,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 // สร้าง Order ใหม่เพื่อรองรับการแยกบิล
 function createNewOrder($table_number) {
     global $conn;
-    $sql = "INSERT INTO orders (table_number, status, total_amount, apply_tax, apply_sc, is_percent) VALUES (?, 'active', 0, 1, 1, 1)";
+    
+    // ตรวจสอบและสร้างคอลัมน์ receipt_no อัตโนมัติหากยังไม่มี
+    $chk_col = $conn->query("SHOW COLUMNS FROM orders LIKE 'receipt_no'");
+    if ($chk_col && $chk_col->num_rows == 0) {
+        $conn->query("ALTER TABLE orders ADD receipt_no VARCHAR(20) NULL AFTER id");
+    }
+    
+    // รันเลขบิลรายวัน โดยจะเริ่มวันใหม่ตอน "06:00 โมงเช้า" (หักลบ 6 ชม.)
+    $date_prefix = date('Y-m-d', strtotime('-6 hours'));
+    
+    // ค้นหาบิลล่าสุดของวันนั้นๆ (อิงตามเวลาตี 6)
+    $sql_last = "SELECT receipt_no FROM orders WHERE DATE(DATE_SUB(created_at, INTERVAL 6 HOUR)) = '$date_prefix' AND receipt_no IS NOT NULL ORDER BY id DESC LIMIT 1";
+    $res_last = $conn->query($sql_last);
+    $next_queue = 1;
+    if ($res_last && $res_last->num_rows > 0) {
+        $last_no = $res_last->fetch_assoc()['receipt_no'];
+        // รองรับกรณีมีข้อมูลเก่าแบบเดิมที่ติดขีด (-) มาด้วย
+        if (strpos($last_no, '-') !== false) {
+            $parts = explode('-', $last_no);
+            $next_queue = intval(end($parts)) + 1;
+        } else {
+            $next_queue = intval($last_no) + 1;
+        }
+    }
+    $receipt_no = sprintf("%03d", $next_queue); // สร้างเป็น 001, 002
+    
+    $sql = "INSERT INTO orders (receipt_no, table_number, status, total_amount, apply_tax, apply_sc, is_percent) VALUES (?, ?, 'active', 0, 1, 1, 1)";
     $stmt = $conn->prepare($sql);
     if (!$stmt) {
         throw new Exception($conn->error);
     }
-    $stmt->bind_param("s", $table_number);
+    $stmt->bind_param("ss", $receipt_no, $table_number);
     if ($stmt->execute()) {
         return $conn->insert_id;
     }
