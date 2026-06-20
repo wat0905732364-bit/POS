@@ -5,15 +5,24 @@ require 'config.php';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
     
+    // ตรวจสอบและอัปเดตฐานข้อมูลให้รองรับการเก็บต้นทุนในบิล
+    $chk_item_cost = $conn->query("SHOW COLUMNS FROM order_items LIKE 'item_cost'");
+    if ($chk_item_cost && $chk_item_cost->num_rows == 0) {
+        $conn->query("ALTER TABLE order_items ADD item_cost DECIMAL(10,2) DEFAULT 0.00 AFTER price");
+    }
+    $chk_order_cost = $conn->query("SHOW COLUMNS FROM orders LIKE 'total_cost'");
+    if ($chk_order_cost && $chk_order_cost->num_rows == 0) {
+        $conn->query("ALTER TABLE orders ADD total_cost DECIMAL(10,2) DEFAULT 0.00 AFTER total_amount");
+    }
+
     if ($_POST['action'] === 'add_item') {
         $order_id = intval($_POST['order_id']);
         $item_name = $_POST['item_name'];
         $price = floatval($_POST['price']);
         
-        // ตรวจสอบสต็อกขวดที่เปิดแล้ว สำหรับรายการที่ต้องตัดเป็น ml
         $check_stmt = $conn->prepare("
-            SELECT p.id, p.ml_per_unit as req_ml, p.inventory_id,
-                   inv.id as master_id, inv.stock_qty as master_stock, inv.ml_per_unit as master_cap, inv.open_ml as master_open
+            SELECT p.id, p.cost_price, p.ml_per_unit as req_ml, p.inventory_id,
+                   inv.id as master_id, inv.cost_price as master_cost, inv.stock_qty as master_stock, inv.ml_per_unit as master_cap, inv.open_ml as master_open
             FROM products p 
             LEFT JOIN products inv ON p.inventory_id = inv.id 
             WHERE p.name = ?
@@ -43,8 +52,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
         }
 
-        $stmt = $conn->prepare("INSERT INTO order_items (order_id, item_name, price, quantity, status) VALUES (?, ?, ?, 1, 'active')");
-        $stmt->bind_param("isd", $order_id, $item_name, $price);
+        // การคำนวณต้นทุน: ถ้าระบุว่าตัดจากขวดหลัก ให้คิด (ต้นทุนหลัก / ความจุหลัก) * ปริมาณที่ใช้
+        $item_cost = floatval($data['cost_price'] ?? 0);
+        if ($data && $data['inventory_id'] !== null && $data['master_cap'] > 0 && $data['req_ml'] > 0) {
+            $item_cost = (floatval($data['master_cost']) / intval($data['master_cap'])) * intval($data['req_ml']);
+        }
+
+        $stmt = $conn->prepare("INSERT INTO order_items (order_id, item_name, price, item_cost, quantity, status) VALUES (?, ?, ?, ?, 1, 'active')");
+        $stmt->bind_param("isdd", $order_id, $item_name, $price, $item_cost);
         echo json_encode(['success' => $stmt->execute()]);
         exit;
     }
@@ -104,32 +119,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'add_product') {
         $name = $_POST['name'];
         $price = $_POST['price'];
+        $cost_price = isset($_POST['cost_price']) ? floatval($_POST['cost_price']) : 0;
         $category = $_POST['category'];
         $stock = isset($_POST['stock_qty']) ? intval($_POST['stock_qty']) : 0;
         $ml = isset($_POST['ml_per_unit']) ? intval($_POST['ml_per_unit']) : 0;
         $inv_id = (!empty($_POST['inventory_id'])) ? intval($_POST['inventory_id']) : null;
         $show_on_pos = isset($_POST['show_on_pos']) ? intval($_POST['show_on_pos']) : 1;
         
-        $result = addProduct($name, $price, $category, $stock, $ml, $inv_id, $show_on_pos);
+        $result = addProduct($name, $price, $cost_price, $category, $stock, $ml, $inv_id, $show_on_pos);
         echo json_encode(['success' => $result]);
         exit;
     }
 
     if ($_POST['action'] === 'edit_product') {
         $id = intval($_POST['id']);
+        
+        // ดึงข้อมูลเดิมก่อนเพื่อเปรียบเทียบว่าสต็อกเปลี่ยนแปลงไปเท่าไหร่
+        $old_stmt = $conn->prepare("SELECT stock_qty, open_ml, cost_price FROM products WHERE id = ?");
+        $old_stmt->bind_param("i", $id);
+        $old_stmt->execute();
+        $old_data = $old_stmt->get_result()->fetch_assoc();
+
         $name = $_POST['name'];
         $category = $_POST['category'];
         $price = floatval($_POST['price']);
+        $cost_price = isset($_POST['cost_price']) ? floatval($_POST['cost_price']) : 0;
         $stock_qty = isset($_POST['stock_qty']) ? intval($_POST['stock_qty']) : 0;
         $ml_per_unit = isset($_POST['ml_per_unit']) ? intval($_POST['ml_per_unit']) : 0;
         $open_ml = isset($_POST['open_ml']) ? intval($_POST['open_ml']) : 0;
         $inv_id = (!empty($_POST['inventory_id'])) ? intval($_POST['inventory_id']) : null;
         $show_on_pos = isset($_POST['show_on_pos']) ? intval($_POST['show_on_pos']) : 1;
         
-        $stmt = $conn->prepare("UPDATE products SET name=?, category=?, price=?, stock_qty=?, ml_per_unit=?, open_ml=?, inventory_id=?, show_on_pos=? WHERE id=?");
-        $stmt->bind_param("ssdiiiiii", $name, $category, $price, $stock_qty, $ml_per_unit, $open_ml, $inv_id, $show_on_pos, $id);
+        $stmt = $conn->prepare("UPDATE products SET name=?, category=?, price=?, cost_price=?, stock_qty=?, ml_per_unit=?, open_ml=?, inventory_id=?, show_on_pos=? WHERE id=?");
+        $stmt->bind_param("ssddiiiiii", $name, $category, $price, $cost_price, $stock_qty, $ml_per_unit, $open_ml, $inv_id, $show_on_pos, $id);
         
         $success = $stmt->execute();
+        
+        // บันทึกประวัติการเปลี่ยนแปลงสต็อก
+        if ($success && $old_data) {
+            $diff_qty = $stock_qty - $old_data['stock_qty'];
+            if ($diff_qty != 0) {
+                $type_qty = ($diff_qty > 0) ? 'restock' : 'sale';
+                $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'unit', ?)");
+                $log_stmt->bind_param("iis", $id, $diff_qty, $type_qty);
+                $log_stmt->execute();
+            }
+            
+            $diff_ml = $open_ml - $old_data['open_ml'];
+            if ($diff_ml != 0) {
+                $type_ml = ($diff_ml > 0) ? 'restock' : 'sale';
+                $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'ml', ?)");
+                $log_stmt->bind_param("iis", $id, $diff_ml, $type_ml);
+                $log_stmt->execute();
+            }
+
+            $cost_diff = $cost_price - $old_data['cost_price'];
+            if ($cost_diff != 0) {
+                // เราจะใช้ type 'restock' สำหรับการเปลี่ยนแปลงต้นทุน
+                $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type, notes) VALUES (?, ?, 'cost', 'restock', ?)");
+                $note = "Cost changed from {$old_data['cost_price']} to {$cost_price}";
+                $log_stmt->bind_param("ids", $id, $cost_diff, $note);
+                $log_stmt->execute();
+            }
+        }
+        
         echo json_encode(['success' => $success, 'error' => $conn->error]);
         exit;
     }
@@ -137,13 +190,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'delete_product') {
         $id = intval($_POST['product_id']);
         
-        // 1. ลบประวัติสต็อกของสินค้านี้ออกก่อน
-        $conn->query("DELETE FROM stock_logs WHERE product_id = $id");
+        // ดึงข้อมูลก่อนลบเพื่อเก็บ Log ว่าสินค้าถูกนำออกไปเท่าไหร่
+        $old_stmt = $conn->prepare("SELECT stock_qty, open_ml FROM products WHERE id = ?");
+        $old_stmt->bind_param("i", $id);
+        $old_stmt->execute();
+        $old_data = $old_stmt->get_result()->fetch_assoc();
+
+        if ($old_data) {
+            if ($old_data['stock_qty'] > 0) {
+                $diff_qty = -$old_data['stock_qty'];
+                $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'unit', 'sale')");
+                $log_stmt->bind_param("ii", $id, $diff_qty);
+                $log_stmt->execute();
+            }
+            if ($old_data['open_ml'] > 0) {
+                $diff_ml = -$old_data['open_ml'];
+                $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'ml', 'sale')");
+                $log_stmt->bind_param("ii", $id, $diff_ml);
+                $log_stmt->execute();
+            }
+        }
         
-        // 2. ปลดการเชื่อมโยงสินค้าลูกที่ผูกกับสินค้านี้อยู่ (ถ้ามี) เพื่อไม่ให้บัค
+        // ปลดการเชื่อมโยงสินค้าลูกที่ผูกกับสินค้านี้อยู่ (ถ้ามี) เพื่อไม่ให้บัค
         $conn->query("UPDATE products SET inventory_id = NULL WHERE inventory_id = $id");
         
-        // 3. ลบสินค้าหลัก
+        // ลบสินค้าหลัก
         $stmt = $conn->prepare("DELETE FROM products WHERE id = ?");
         $stmt->bind_param("i", $id);
         $success = $stmt->execute();
@@ -190,10 +261,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $stmt->bind_param("ii", $quantity, $product_id);
         $success = $stmt->execute();
 
-        // 2. บันทึกประวัติการเติมสต็อก
-        if ($success) {
-            $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'unit', 'restock')");
-            $log_stmt->bind_param("ii", $product_id, $quantity);
+        // 2. บันทึกประวัติการเติม/ลดสต็อก
+        if ($success && $quantity != 0) {
+            $type = ($quantity > 0) ? 'restock' : 'sale';
+            $log_stmt = $conn->prepare("INSERT INTO stock_logs (product_id, qty_change, unit, type) VALUES (?, ?, 'unit', ?)");
+            $log_stmt->bind_param("iis", $product_id, $quantity, $type);
             $log_stmt->execute();
         }
 
@@ -213,9 +285,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'get_daily_stock_details') {
         $date = $_POST['date'];
-        $sql = "SELECT p.name, s.qty_change, s.unit, s.type, s.created_at 
+        $sql = "SELECT p.name, s.qty_change, s.unit, s.type, s.created_at, s.product_id 
                 FROM stock_logs s
-                JOIN products p ON s.product_id = p.id
+                LEFT JOIN products p ON s.product_id = p.id
                 WHERE DATE(s.created_at) = ?
                 ORDER BY s.created_at DESC";
         $stmt = $conn->prepare($sql);
@@ -231,7 +303,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $date = $_POST['date'];
         $cashier = isset($_POST['cashier']) ? $_POST['cashier'] : '';
         
-        $sql = "SELECT id, receipt_no, table_number, total_amount, created_at, cashier_name 
+        $sql = "SELECT id, receipt_no, table_number, total_amount, total_cost, created_at, cashier_name 
                 FROM orders 
                 WHERE DATE(created_at) = ? AND status = 'paid'";
                 
@@ -244,6 +316,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sql .= " ORDER BY created_at DESC";
             $stmt = $conn->prepare($sql);
             $stmt->bind_param("s", $date);
+        }
+        $stmt->execute();
+        
+        echo json_encode($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
+        exit;
+    }
+
+    if ($_POST['action'] === 'get_monthly_orders') {
+        $month = $_POST['month'];
+        $cashier = isset($_POST['cashier']) ? $_POST['cashier'] : '';
+        
+        $sql = "SELECT id, receipt_no, table_number, total_amount, total_cost, created_at, cashier_name 
+                FROM orders 
+                WHERE DATE_FORMAT(created_at, '%Y-%m') = ? AND status = 'paid'";
+                
+        if ($cashier !== '') {
+            $sql .= " AND cashier_name = ?";
+            $sql .= " ORDER BY created_at DESC";
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param("ss", $month, $cashier);
+        } else {
+            $sql .= " ORDER BY created_at DESC";
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param("s", $month);
         }
         $stmt->execute();
         
@@ -355,6 +451,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // ทุก 100 บาทที่จ่ายจริง ได้ 1 แต้ม
         $points_earned = $member_id ? floor($final_paid / 100) : 0;
         
+        // คำนวณต้นทุนรวมของบิลนี้
+        $cost_res = $conn->query("SELECT SUM(item_cost * quantity) as sum_cost FROM order_items WHERE order_id = $order_id AND status = 'active'");
+        $total_cost = 0;
+        if ($cost_res && $cost_row = $cost_res->fetch_assoc()) {
+            $total_cost = floatval($cost_row['sum_cost']);
+        }
+
         // ตรวจสอบและสร้างคอลัมน์ cashier_name อัตโนมัติหากยังไม่มี
         $chk_col_cashier = $conn->query("SHOW COLUMNS FROM orders LIKE 'cashier_name'");
         if ($chk_col_cashier && $chk_col_cashier->num_rows == 0) {
@@ -362,14 +465,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
         $cashier_name = isset($_SESSION['name']) ? $_SESSION['name'] : 'Unknown';
 
-        $sql = "UPDATE orders SET status = 'paid', total_amount = ?, discount_amount = ?, promo_amount = ?, is_percent = ?, apply_sc = ?, apply_tax = ?, cashier_name = ?";
+        $sql = "UPDATE orders SET status = 'paid', total_amount = ?, total_cost = ?, discount_amount = ?, promo_amount = ?, is_percent = ?, apply_sc = ?, apply_tax = ?, cashier_name = ?";
         if ($member_id) {
             $sql .= ", member_id = $member_id, points_earned = $points_earned, points_used = $points_used";
         }
         $sql .= " WHERE id = ?";
         
         $stmt = $conn->prepare($sql);
-        $stmt->bind_param("dddiiisi", $final_paid, $discount, $promo_amount, $is_percent, $apply_sc, $apply_tax, $cashier_name, $order_id);
+        $stmt->bind_param("ddddiiisi", $final_paid, $total_cost, $discount, $promo_amount, $is_percent, $apply_sc, $apply_tax, $cashier_name, $order_id);
         $result = $stmt->execute();
 
         if ($result) {
@@ -624,18 +727,18 @@ function voidAll($order_id) {
 // เพิ่มเมนูพิเศษ (Special Menu) กำหนดราคาเองได้ทันที
 function addSpecialItem($order_id, $item_name, $price, $quantity = 1, $emp_id) {
     global $conn;
-    $sql = "INSERT INTO order_items (order_id, item_name, price, quantity, status, created_by) VALUES (?, ?, ?, ?, 'active', ?)";
+    $sql = "INSERT INTO order_items (order_id, item_name, price, item_cost, quantity, status, created_by) VALUES (?, ?, ?, 0, ?, 'active', ?)";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("isdii", $order_id, $item_name, $price, $quantity, $emp_id);
+    $stmt->bind_param("isddii", $order_id, $item_name, $price, $quantity, $emp_id);
     return $stmt->execute();
 }
 
 // เพิ่มสินค้าใหม่ลงในฐานข้อมูล (Master Data)
-function addProduct($name, $price, $category, $stock = 0, $ml = 0, $inv_id = null, $show_on_pos = 1) {
+function addProduct($name, $price, $cost_price, $category, $stock = 0, $ml = 0, $inv_id = null, $show_on_pos = 1) {
     global $conn;
-    $sql = "INSERT INTO products (name, price, category, stock_qty, ml_per_unit, inventory_id, show_on_pos) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    $sql = "INSERT INTO products (name, price, cost_price, category, stock_qty, ml_per_unit, inventory_id, show_on_pos) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("sdsiiii", $name, $price, $category, $stock, $ml, $inv_id, $show_on_pos);
+    $stmt->bind_param("sddsiiii", $name, $price, $cost_price, $category, $stock, $ml, $inv_id, $show_on_pos);
     
     if ($stmt->execute()) {
         $new_product_id = $conn->insert_id;

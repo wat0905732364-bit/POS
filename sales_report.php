@@ -18,6 +18,10 @@ if ($chk_col && $chk_col->num_rows == 0) {
 
 // รับค่าตัวกรองแคชเชียร์
 $cashier_filter = isset($_GET['cashier']) ? $_GET['cashier'] : '';
+// รับค่าตัวกรองช่วงวันที่
+$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : '';
+$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : '';
+
 $where_orders = "status = 'paid'";
 $where_items = "o.status = 'paid' AND oi.status = 'active'";
 
@@ -26,12 +30,18 @@ if ($cashier_filter !== '') {
     $where_orders .= " AND cashier_name = '$safe_cashier'";
     $where_items .= " AND o.cashier_name = '$safe_cashier'";
 }
+if ($start_date !== '' && $end_date !== '') {
+    $where_orders .= " AND DATE(created_at) BETWEEN '{$start_date}' AND '{$end_date}'";
+    $where_items .= " AND DATE(o.created_at) BETWEEN '{$start_date}' AND '{$end_date}'";
+}
 
 // ดึงรายชื่อแคชเชียร์ที่มีการทำรายการขายเพื่อมาใส่ใน Dropdown
 $cashier_list = $conn->query("SELECT DISTINCT cashier_name FROM orders WHERE status = 'paid' AND cashier_name IS NOT NULL AND cashier_name != '' ORDER BY cashier_name ASC");
 
 // เตรียมข้อมูลสรุปยอดขายรายวันสำหรับกราฟและตาราง (ย้อนหลัง 30 วัน)
-$sql_daily = "SELECT DATE(created_at) as sale_date, COUNT(id) as bill_count, SUM(total_amount) as daily_total 
+$sql_daily = "SELECT DATE(created_at) as sale_date, COUNT(id) as bill_count, 
+                     SUM(total_amount) as daily_total, 
+                     SUM(total_cost) as daily_cost 
               FROM orders WHERE $where_orders 
               GROUP BY DATE(created_at) ORDER BY sale_date DESC LIMIT 30";
 $res_daily = $conn->query($sql_daily);
@@ -72,6 +82,15 @@ if ($res_cat && $res_cat->num_rows > 0) {
         $c_idx++;
     }
 }
+
+// เตรียมข้อมูลสรุปยอดขายรายเดือน
+$sql_monthly = "SELECT DATE_FORMAT(created_at, '%Y-%m') as sale_month, 
+                       COUNT(id) as bill_count, 
+                       SUM(total_amount) as monthly_total,
+                       SUM(total_cost) as monthly_cost
+                FROM orders WHERE $where_orders 
+                GROUP BY DATE_FORMAT(created_at, '%Y-%m') ORDER BY sale_month DESC";
+$res_monthly = $conn->query($sql_monthly);
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -89,6 +108,8 @@ if ($res_cat && $res_cat->num_rows > 0) {
         th { color: #00d4ff; }
         h2 { margin-top: 40px; color: #00d4ff; border-bottom: 1px solid #333; padding-bottom: 10px; }
         .summary-total { color: #2ecc71; font-weight: bold; text-align: right; }
+        .summary-cost { color: #f1c40f; text-align: right; }
+        .summary-profit { color: #00d4ff; font-weight: bold; text-align: right; }
         
         /* Modal Styles สำหรับดูรายละเอียดบิล */
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
@@ -167,11 +188,12 @@ if ($res_cat && $res_cat->num_rows > 0) {
                     data.forEach(order => {
                         const displayNo = order.receipt_no ? "#" + order.receipt_no : "#" + order.id;
                         const time = new Date(order.created_at).toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'});
+                        const profit = parseFloat(order.total_amount) - parseFloat(order.total_cost || 0);
                         listContainer.innerHTML += `
                             <div class="item-row" style="align-items: center;">
                                 <div style="flex:1;"><button onclick="viewOrderDetails(${order.id})" style="background:none; border:1px solid #00d4ff; color:#00d4ff; padding:4px 8px; border-radius:4px; cursor:pointer; font-size: 13px;">🔍 ${displayNo}</button></div>
                                 <div style="flex:1;">โต๊ะ ${order.table_number}</div>
-                                <div style="flex:1; text-align:right; color:#2ecc71;">฿${parseFloat(order.total_amount).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                <div style="flex:2; text-align:right;"><span style="color:#2ecc71;">฿${parseFloat(order.total_amount).toLocaleString()}</span><br><small style="color:#00d4ff;">กำไร ฿${profit.toLocaleString()}</small></div>
                                 <div style="flex:1; text-align:right; font-size:13px; color:#aaa;">เวลา ${time}</div>
                             </div>
                         `;
@@ -186,6 +208,50 @@ if ($res_cat && $res_cat->num_rows > 0) {
         }
         function closeDailyModal() {
             document.getElementById('dailyDetailModal').style.display = 'none';
+        }
+
+        // ฟังก์ชันเปิดดูรายการบิลทั้งหมดในแต่ละเดือน
+        async function viewMonthlyDetails(monthStr, displayMonth) {
+            const formData = new FormData();
+            formData.append('action', 'get_monthly_orders');
+            formData.append('month', monthStr);
+            const cashierFilter = new URLSearchParams(window.location.search).get('cashier') || '';
+            if (cashierFilter) {
+                formData.append('cashier', cashierFilter);
+            }
+
+            try {
+                const response = await fetch('pos_action.php', { method: 'POST', body: formData });
+                const data = await response.json();
+                
+                const listContainer = document.getElementById('modal-monthly-list');
+                listContainer.innerHTML = '';
+                
+                if (data && data.length > 0) {
+                    data.forEach(order => {
+                        const displayNo = order.receipt_no ? "#" + order.receipt_no : "#" + order.id;
+                        const time = new Date(order.created_at).toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'});
+                        const date = new Date(order.created_at).toLocaleDateString('th-TH', {day: '2-digit', month:'2-digit', year:'numeric'});
+                        const profit = parseFloat(order.total_amount) - parseFloat(order.total_cost || 0);
+                        listContainer.innerHTML += `
+                            <div class="item-row" style="align-items: center;">
+                                <div style="flex:1;"><button onclick="viewOrderDetails(${order.id})" style="background:none; border:1px solid #00d4ff; color:#00d4ff; padding:4px 8px; border-radius:4px; cursor:pointer; font-size: 13px;">🔍 ${displayNo}</button></div>
+                                <div style="flex:1;">โต๊ะ ${order.table_number}</div>
+                                <div style="flex:2; text-align:right;"><span style="color:#2ecc71;">฿${parseFloat(order.total_amount).toLocaleString()}</span><br><small style="color:#00d4ff;">กำไร ฿${profit.toLocaleString()}</small></div>
+                                <div style="flex:1; text-align:right; font-size:13px; color:#aaa;">วันที่ ${date}<br>เวลา ${time}</div>
+                            </div>
+                        `;
+                    });
+                } else {
+                    listContainer.innerHTML = '<div style="text-align:center; padding: 20px; color:#aaa;">ไม่มีข้อมูลบิลในเดือนนี้</div>';
+                }
+
+                document.getElementById('modal-monthly-date').innerText = displayMonth;
+                document.getElementById('monthlyDetailModal').style.display = 'flex';
+            } catch (e) { console.error(e); alert("เกิดข้อผิดพลาดในการดึงข้อมูล"); }
+        }
+        function closeMonthlyModal() {
+            document.getElementById('monthlyDetailModal').style.display = 'none';
         }
     </script>
 </head>
@@ -204,21 +270,32 @@ if ($res_cat && $res_cat->num_rows > 0) {
         <h1>รายงานยอดขาย</h1>
 
         <!-- ตัวกรองข้อมูลแคชเชียร์ -->
-        <div style="margin-bottom: 25px; background: #252a3a; padding: 15px; border-radius: 10px; display: inline-block;">
-            <form method="GET" style="display: flex; gap: 10px; align-items: center; margin: 0;">
-                <label for="cashier" style="color: #aaa; margin: 0;">👤 ยอดขายของแคชเชยร์:</label>
-                <select name="cashier" id="cashier" onchange="this.form.submit()" style="padding: 8px 12px; border-radius: 6px; background: #0f111a; color: white; border: 1px solid #444; outline: none; cursor: pointer;">
-                    <option value=> All </option>
-                    <?php
-                    if ($cashier_list && $cashier_list->num_rows > 0) {
-                        while($c = $cashier_list->fetch_assoc()) {
-                            $c_name = htmlspecialchars($c['cashier_name']);
-                            $selected = ($cashier_filter === $c['cashier_name']) ? 'selected' : '';
-                            echo "<option value='{$c_name}' {$selected}>{$c_name}</option>";
+        <div style="margin-bottom: 25px; background: #252a3a; padding: 15px; border-radius: 10px;">
+            <form method="GET" style="display: flex; flex-wrap: wrap; gap: 20px; align-items: center; margin: 0;">
+                <div>
+                    <label for="cashier" style="color: #aaa; margin-right: 10px;">👤 ยอดขายของแคชเชียร์:</label>
+                    <select name="cashier" id="cashier" style="padding: 8px 12px; border-radius: 6px; background: #0f111a; color: white; border: 1px solid #444; outline: none; cursor: pointer;">
+                        <option value="">-- แสดงทั้งหมด (All) --</option>
+                        <?php
+                        if ($cashier_list && $cashier_list->num_rows > 0) {
+                            while($c = $cashier_list->fetch_assoc()) {
+                                $c_name = htmlspecialchars($c['cashier_name']);
+                                $selected = ($cashier_filter === $c['cashier_name']) ? 'selected' : '';
+                                echo "<option value='{$c_name}' {$selected}>{$c_name}</option>";
+                            }
                         }
-                    }
-                    ?>
-                </select>
+                        ?>
+                    </select>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <label for="start_date" style="color: #aaa;">📅 จากวันที่:</label>
+                    <input type="date" name="start_date" id="start_date" value="<?php echo $start_date; ?>" style="padding: 7px; border-radius: 6px; background: #0f111a; color: white; border: 1px solid #444;">
+                    <label for="end_date" style="color: #aaa;">ถึงวันที่:</label>
+                    <input type="date" name="end_date" id="end_date" value="<?php echo $end_date; ?>" style="padding: 7px; border-radius: 6px; background: #0f111a; color: white; border: 1px solid #444;">
+                </div>
+                <div>
+                    <button type="submit" style="background: #00d4ff; color: black; border: none; padding: 8px 20px; border-radius: 6px; font-weight: bold; cursor: pointer;">🔍 กรองข้อมูล</button>
+                </div>
             </form>
         </div>
 
@@ -240,33 +317,41 @@ if ($res_cat && $res_cat->num_rows > 0) {
 
         <script>
             document.addEventListener("DOMContentLoaded", function() {
-                const ctx = document.getElementById('salesChart').getContext('2d');
-                new Chart(ctx, {
-                    type: 'line', // หากต้องการกราฟแท่งสามารถเปลี่ยนจาก 'line' เป็น 'bar' ได้ครับ
-                    data: {
-                        labels: <?php echo json_encode($chart_labels); ?>,
-                        datasets: [{
-                            label: 'ยอดขายรายวัน (บาท)',
-                            data: <?php echo json_encode($chart_data); ?>,
-                            backgroundColor: 'rgba(0, 212, 255, 0.2)',
-                            borderColor: '#00d4ff',
-                            borderWidth: 2,
-                            pointBackgroundColor: '#f1c40f',
-                            pointBorderColor: '#fff',
-                            pointRadius: 4,
-                            tension: 0.3, // ทำให้เส้นโค้งสวยงาม
-                            fill: true
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        scales: {
-                            y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#aaa', font: { family: 'Sarabun' } } },
-                            x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#aaa', font: { family: 'Sarabun' } } }
+                const salesChartCanvas = document.getElementById('salesChart');
+                const chartData = <?php echo json_encode($chart_data); ?>;
+
+                if (chartData.length > 1) {
+                    new Chart(salesChartCanvas.getContext('2d'), {
+                        type: 'line', // กลับมาใช้กราฟเส้นเหมือนเดิม
+                        data: {
+                            labels: <?php echo json_encode($chart_labels); ?>,
+                            datasets: [{
+                                label: 'ยอดขายรายวัน (บาท)',
+                                data: chartData,
+                                backgroundColor: 'rgba(0, 212, 255, 0.2)',
+                                borderColor: '#00d4ff',
+                                borderWidth: 2,
+                                pointBackgroundColor: '#f1c40f',
+                                pointBorderColor: '#fff',
+                                pointRadius: 4,
+                                tension: 0.3, // ทำให้เส้นโค้งสวยงาม
+                                fill: true
+                            }]
                         },
-                        plugins: { legend: { labels: { color: '#fff', font: { family: 'Sarabun', size: 14 } } } }
-                    }
-                });
+                        options: {
+                            responsive: true,
+                            scales: {
+                                y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#aaa', font: { family: 'Sarabun' } } },
+                                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#aaa', font: { family: 'Sarabun' } } }
+                            },
+                            plugins: { legend: { labels: { color: '#fff', font: { family: 'Sarabun', size: 14 } } } }
+                        }
+                    });
+                } else {
+                    // ถ้ามีข้อมูลน้อยกว่า 2 วัน ให้แสดงเป็นข้อความแทน
+                    const parentDiv = salesChartCanvas.parentElement;
+                    parentDiv.innerHTML = '<div style="display:flex; align-items:center; justify-content:center; height:100%; color:#aaa; text-align:center;">ข้อมูลไม่เพียงพอสำหรับวาดกราฟเส้น<br>(ต้องมียอดขายอย่างน้อย 2 วัน)</div>';
+                }
 
                 // วาดกราฟหมวดหมู่ (Doughnut Chart)
                 const ctxCat = document.getElementById('categoryChart').getContext('2d');
@@ -303,7 +388,9 @@ if ($res_cat && $res_cat->num_rows > 0) {
                 <tr>
                     <th>วันที่</th>
                     <th>จำนวนบิล</th>
-                    <th style="text-align: right;">ยอดรวม</th>
+                    <th style="text-align: right;">ยอดขายรวม</th>
+                    <th style="text-align: right;">ต้นทุนรวม</th>
+                    <th style="text-align: right;">กำไรสุทธิ</th>
                     <th></th>
                 </tr>
             </thead>
@@ -313,15 +400,56 @@ if ($res_cat && $res_cat->num_rows > 0) {
                     foreach($daily_rows as $row) {
                         $raw_date = $row['sale_date'];
                         $display_date = date('d/m/Y', strtotime($raw_date));
+                        $profit = $row['daily_total'] - $row['daily_cost'];
                         echo "<tr>";
                         echo "<td>" . $display_date . "</td>";
                         echo "<td>" . $row['bill_count'] . " บิล</td>";
                         echo "<td class='summary-total'>฿" . number_format($row['daily_total'], 2) . "</td>";
+                        echo "<td class='summary-cost'>฿" . number_format($row['daily_cost'], 2) . "</td>";
+                        echo "<td class='summary-profit'>฿" . number_format($profit, 2) . "</td>";
                         echo "<td style='text-align:center;'><button onclick='viewDailyDetails(\"{$raw_date}\", \"{$display_date}\")' style='background:#3498db; color:white; border:none; padding:6px 12px; border-radius:6px; cursor:pointer; font-family: \"Sarabun\", sans-serif; font-size:13px;'>🔍 ดูบิลวันนี้</button></td>";
                         echo "</tr>";
                     }
                 } else {
-                    echo '<tr><td colspan="3" style="text-align:center;">ยังไม่มีข้อมูลยอดขาย</td></tr>';
+                    echo '<tr><td colspan="6" style="text-align:center;">ยังไม่มีข้อมูลยอดขาย</td></tr>';
+                }
+                ?>
+            </tbody>
+        </table>
+
+        <!-- ส่วนสรุปยอดรายเดือน -->
+        <h2>📅 สรุปยอดขายรายเดือน (Monthly Summary)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>เดือน</th>
+                    <th>จำนวนบิลทั้งหมด</th>
+                    <th style="text-align: right;">ยอดรับรวม</th>
+                    <th style="text-align: right;">ต้นทุนรวม</th>
+                    <th style="text-align: right;">กำไรสุทธิ</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php
+                if ($res_monthly && $res_monthly->num_rows > 0) {
+                    while($row = $res_monthly->fetch_assoc()) {
+                        // แปลง YYYY-MM เป็นชื่อเดือนภาษาไทย
+                        $dateObj   = DateTime::createFromFormat('!Y-m', $row['sale_month']);
+                        $monthName = date('F Y', $dateObj->getTimestamp()); // ใช้ date() เพื่อให้ได้ชื่อเดือนภาษาอังกฤษ
+                        
+                        $monthly_profit = $row['monthly_total'] - $row['monthly_cost'];
+                        echo "<tr>";
+                        echo "<td>" . $monthName . "</td>";
+                        echo "<td>" . $row['bill_count'] . " บิล</td>";
+                        echo "<td class='summary-total'>฿" . number_format($row['monthly_total'], 2) . "</td>";
+                        echo "<td class='summary-cost'>฿" . number_format($row['monthly_cost'], 2) . "</td>";
+                        echo "<td class='summary-profit'>฿" . number_format($monthly_profit, 2) . "</td>";
+                        echo "<td style='text-align:center;'><button onclick='viewMonthlyDetails(\"{$row['sale_month']}\", \"{$monthName}\")' style='background:#9b59b6; color:white; border:none; padding:6px 12px; border-radius:6px; cursor:pointer; font-family: \"Sarabun\", sans-serif; font-size:13px;'>🔍 ดูบิลเดือนนี้</button></td>";
+                        echo "</tr>";
+                    }
+                } else {
+                    echo '<tr><td colspan="6" style="text-align:center;">ยังไม่มีข้อมูลยอดขาย</td></tr>';
                 }
                 ?>
             </tbody>
@@ -330,7 +458,7 @@ if ($res_cat && $res_cat->num_rows > 0) {
         <!-- ส่วนรายละเอียดรายการ -->
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <h2>📝 รายละเอียดบิลรายรายการ</h2>
-            <a href="export_sales.php?cashier=<?php echo urlencode($cashier_filter); ?>" style="background: #27ae60; color: white; padding: 8px 15px; border-radius: 6px; font-size: 14px; font-weight: bold;">📥 Export to Excel</a>
+            <a href="export_sales.php?cashier=<?php echo urlencode($cashier_filter); ?>&start_date=<?php echo $start_date; ?>&end_date=<?php echo $end_date; ?>" style="background: #27ae60; color: white; padding: 8px 15px; border-radius: 6px; font-size: 14px; font-weight: bold;">📥 Export to Excel</a>
         </div>
         <table>
             <thead>
@@ -338,13 +466,14 @@ if ($res_cat && $res_cat->num_rows > 0) {
                     <th>เลขที่บิล</th>
                     <th>โต๊ะ</th>
                     <th>ยอดสุทธิ</th>
+                    <th>ต้นทุน</th>
                     <th>เวลา</th>
                     <th>แคชเชียร์</th>
                 </tr>
             </thead>
             <tbody>
                 <?php
-                $sql = "SELECT id, receipt_no, table_number, total_amount, created_at, cashier_name FROM orders WHERE $where_orders ORDER BY created_at DESC";
+                $sql = "SELECT id, receipt_no, table_number, total_amount, total_cost, created_at, cashier_name FROM orders WHERE $where_orders ORDER BY created_at DESC";
                 $result = $conn->query($sql);
 
                 if ($result && $result->num_rows > 0) {
@@ -354,6 +483,7 @@ if ($res_cat && $res_cat->num_rows > 0) {
                         echo "<td><button onclick='viewOrderDetails(" . $row['id'] . ")' style='background:none; border:1px solid #00d4ff; color:#00d4ff; padding:5px 12px; border-radius:6px; cursor:pointer; font-family: \"Sarabun\", sans-serif; font-weight:bold; transition: 0.3s;' onmouseover='this.style.background=\"#00d4ff\"; this.style.color=\"#000\";' onmouseout='this.style.background=\"none\"; this.style.color=\"#00d4ff\";'>🔍 " . $display_no . "</button></td>";
                         echo "<td>โต๊ะ " . htmlspecialchars($row['table_number']) . "</td>";
                         echo "<td>฿" . number_format($row['total_amount'], 2) . "</td>";
+                        echo "<td><span style='color:#f1c40f;'>฿" . number_format($row['total_cost'], 2) . "</span></td>";
                         echo "<td>" . date('d/m/Y H:i', strtotime($row['created_at'])) . "</td>";
                         echo "<td><span style='background:#34495e; padding:3px 8px; border-radius:4px; font-size:13px;'>" . htmlspecialchars($row['cashier_name'] ?? '-') . "</span></td>";
                         echo "</tr>";
@@ -387,6 +517,19 @@ if ($res_cat && $res_cat->num_rows > 0) {
                 <h3>📅 บิลประจำวันที่: <span id="modal-daily-date"></span></h3>
             </div>
             <div id="modal-daily-list" class="item-list">
+                <!-- รายการบิลจะถูกนำมาแสดงที่นี่ผ่าน JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal สำหรับดูบิลรายเดือน (z-index: 1000) -->
+    <div id="monthlyDetailModal" class="modal-overlay" style="z-index: 1000;">
+        <div class="modal-box" style="width: 550px;">
+            <div class="modal-header">
+                <button class="close-btn" onclick="closeMonthlyModal()">ปิด</button>
+                <h3>📅 บิลประจำเดือน: <span id="modal-monthly-date"></span></h3>
+            </div>
+            <div id="modal-monthly-list" class="item-list">
                 <!-- รายการบิลจะถูกนำมาแสดงที่นี่ผ่าน JavaScript -->
             </div>
         </div>

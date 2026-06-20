@@ -48,6 +48,9 @@ $discount = ($is_percent ? ($subtotal * ($discount_amt / 100)) : $discount_amt);
 
 $points_used = isset($order['points_used']) ? floatval($order['points_used']) : 0;
 $total = max(0, ($subtotal + $sc + $tax) - $discount - $promo_amount - $points_used);
+
+// ตั้งค่าเบอร์พร้อมเพย์ (PromptPay) ของร้านสำหรับสร้าง QR Code
+$promptpay_id = "0993157603"; // <--- ⚠️ เปลี่ยนเป็นเบอร์โทรศัพท์หรือเลขประจำตัวผู้เสียภาษีของร้านคุณ
 ?>
 
 <!DOCTYPE html>
@@ -130,6 +133,14 @@ $total = max(0, ($subtotal + $sc + $tax) - $discount - $promo_amount - $points_u
             <?php endif; ?>
             <div class="total-row grand-total"><span>TOTAL</span><span><?php echo number_format($total, 2); ?></span></div>
         </div>
+
+        <?php if($total > 0): ?>
+        <!-- ส่วนแสดง QR Code สแกนจ่าย -->
+        <div style="text-align: center; margin-top: 5mm; border-top: 1px dashed #000; padding-top: 5mm;">
+            <p style="margin: 0 0 5px 0; font-size: 13px; font-weight: bold;">สแกนเพื่อชำระเงิน (PromptPay)</p>
+            <img src="https://promptpay.io/<?php echo $promptpay_id; ?>/<?php echo number_format($total, 2, '.', ''); ?>.png" alt="QR Code PromptPay" style="width: 55mm; height: 55mm;">
+        </div>
+        <?php endif; ?>
 
         <div class="footer">
             <p>ราคาสินค้ารวมภาษีมูลค่าเพิ่มแล้ว</p>

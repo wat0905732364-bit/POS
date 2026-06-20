@@ -15,6 +15,18 @@ $chk = $conn->query("SHOW COLUMNS FROM stock_logs LIKE 'unit'");
 if ($chk && $chk->num_rows == 0) {
     $conn->query("ALTER TABLE stock_logs ADD unit VARCHAR(20) NOT NULL DEFAULT 'unit' AFTER qty_change");
 }
+
+// อัพเดทฐานข้อมูลเพิ่ม column 'cost_price' อัตโนมัติ
+$chk_cost = $conn->query("SHOW COLUMNS FROM products LIKE 'cost_price'");
+if ($chk_cost && $chk_cost->num_rows == 0) {
+    $conn->query("ALTER TABLE products ADD cost_price DECIMAL(10,2) DEFAULT 0.00 AFTER price");
+}
+
+// อัพเดทฐานข้อมูลเพิ่ม column 'notes' สำหรับบันทึกรายละเอียดเพิ่มเติม
+$chk_notes = $conn->query("SHOW COLUMNS FROM stock_logs LIKE 'notes'");
+if ($chk_notes && $chk_notes->num_rows == 0) {
+    $conn->query("ALTER TABLE stock_logs ADD notes VARCHAR(255) NULL AFTER type");
+}
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -177,6 +189,7 @@ if ($chk && $chk->num_rows == 0) {
             document.getElementById('edit_name').value = product.name;
             document.getElementById('edit_category').value = product.category;
             document.getElementById('edit_price').value = product.price;
+            document.getElementById('edit_cost_price').value = product.cost_price || '0.00';
             document.getElementById('edit_stock_qty').value = product.stock_qty;
             document.getElementById('edit_open_ml').value = product.open_ml || 0;
             document.getElementById('edit_ml_per_unit').value = product.ml_per_unit;
@@ -228,21 +241,29 @@ if ($chk && $chk->num_rows == 0) {
                 if (result.length === 0) {
                     tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center;">ไม่มีข้อมูลในวันนี้</td></tr>';
                 } else {
-                    let totalInUnit = 0, totalOutUnit = 0, totalOutMl = 0;
+                    let totalInUnit = 0, totalOutUnit = 0, totalOutMl = 0, costChanges = 0;
                     result.forEach(row => {
                         const isOut = parseInt(row.qty_change) < 0;
-                        const qtyText = (isOut ? '' : '+') + row.qty_change + ' ' + (row.unit === 'ml' ? 'ml' : 'ชิ้น/ขวด');
+                        let qtyText = '';
+                        if (row.unit === 'cost') {
+                            qtyText = `<span style="color:#f39c12;">เปลี่ยนต้นทุน</span>`;
+                            costChanges += parseFloat(row.qty_change);
+                        } else {
+                            qtyText = (isOut ? '' : '+') + row.qty_change + ' ' + (row.unit === 'ml' ? 'ml' : 'ชิ้น/ขวด');
+                        }
+
                         const qtyClass = isOut ? 'qty-out' : 'qty-in';
                         
                         if (!isOut && row.unit === 'unit') totalInUnit += parseInt(row.qty_change);
                         if (isOut && row.unit === 'unit') totalOutUnit += Math.abs(parseInt(row.qty_change));
                         if (isOut && row.unit === 'ml') totalOutMl += Math.abs(parseInt(row.qty_change));
 
-                        let typeText = row.type === 'sale' ? 'ตัดสต็อก (ขาย/เปิด)' : 'เติมสต็อก';
+                        let typeText = row.notes ? row.notes : (row.type === 'sale' ? 'ตัด/ลดสต็อก' : 'เพิ่ม/เติมสต็อก');
                         const timeMatch = row.created_at.match(/ (\d{2}:\d{2})/);
                         const time = timeMatch ? timeMatch[1] : '-';
+                        const productName = row.name ? row.name : `<span style="color:#aaa; font-style:italic;">[สินค้าถูกลบ (ID: ${row.product_id})]</span>`;
 
-                        tableBody.innerHTML += `<tr><td>${time}</td><td>${row.name}</td><td><span class="${qtyClass}">${qtyText}</span></td><td><small style="color:#aaa;">${typeText}</small></td></tr>`;
+                        tableBody.innerHTML += `<tr><td>${time}</td><td>${productName}</td><td><span class="${qtyClass}">${qtyText}</span></td><td><small style="color:#aaa;">${typeText}</small></td></tr>`;
                     });
                     document.getElementById('summary-detail').innerHTML = `<b>สรุปวันนี้:</b> เติมเข้า <span class="qty-in">+${totalInUnit} ชิ้น</span> | ขายออก <span class="qty-out">-${totalOutUnit} ชิ้น</span> และขายออก <span class="qty-out">-${totalOutMl} ml</span>`;
                 }
@@ -282,6 +303,7 @@ if ($chk && $chk->num_rows == 0) {
                 <tr>
                     <th>หมวดหมู่</th>
                     <th>ชื่อสินค้า</th>
+                    <th>ราคาขาย / <span style="color:#f1c40f;">ต้นทุน</span></th>
                     <th style="text-align: center;">คงเหลือ (Units/ml)</th>
                     <th style="text-align: center;">ขวดเปิดใช้งาน (ml)</th>
                     <th style="text-align: center;">ปริมาณ/ชิ้น</th>
@@ -290,7 +312,7 @@ if ($chk && $chk->num_rows == 0) {
             </thead>
             <tbody>
                 <?php
-                $sql = "SELECT p.*, inv.name as parent_name 
+                $sql = "SELECT p.*, inv.name as parent_name
                         FROM products p 
                         LEFT JOIN products inv ON p.inventory_id = inv.id 
                         ORDER BY p.category ASC, p.name ASC";
@@ -313,12 +335,13 @@ if ($chk && $chk->num_rows == 0) {
 
                         echo "<tr>";
                         echo "<td><small>" . htmlspecialchars($row['category']) . "</small></td>";
-                        echo "<td>" . $displayName . "</td>";
+                        echo "<td>" . $displayName . "</td>";                        
+                        echo "<td>฿" . number_format($row['price'], 2) . "<br><span style='color:#f1c40f; font-size:13px;'>ต้นทุน: ฿" . number_format($row['cost_price'], 2) . "</span></td>";
                         echo "<td style='text-align: center;' class='$stockClass'>" . number_format($row['stock_qty']) . "</td>";
                         echo "<td style='text-align: center; color:#f1c40f; font-weight:bold;'>" . ($row['open_ml'] > 0 ? number_format($row['open_ml']) . " ml" : "-") . "</td>";
                         echo "<td style='text-align: center; color:#00d4ff;'>" . ($row['ml_per_unit'] > 0 ? $row['ml_per_unit'] . " ml" : "-") . "</td>";
                         echo "<td style='text-align: center; white-space: nowrap;'>
-                                <input type='number' id='qty-{$row['id']}' class='stock-input' placeholder='$placeholder' value='0' min='0'>
+                                <input type='number' id='qty-{$row['id']}' class='stock-input' placeholder='จำนวน' value='0' min='0'>
                                 <button onclick='deleteProduct({$row['id']})' class='btn-decrease' title='ลบสินค้านี้ออกจากระบบ'>ลบทิ้ง</button>
                                 <button onclick='updateStock({$row['id']}, \"add\")' class='btn-update'>เพิ่ม</button>
                                 <button onclick='openEditModal({$safeRowData})' class='btn-edit'>แก้ไข</button>
@@ -326,7 +349,7 @@ if ($chk && $chk->num_rows == 0) {
                         echo "</tr>";
                     }
                 } else {
-                    echo '<tr><td colspan="4" style="text-align:center;">ไม่พบข้อมูลสินค้าในระบบ</td></tr>';
+                    echo '<tr><td colspan="7" style="text-align:center;">ไม่พบข้อมูลสินค้าในระบบ</td></tr>';
                 }
                 ?>
             </tbody>
@@ -401,6 +424,10 @@ if ($chk && $chk->num_rows == 0) {
                         <input type="number" name="price" step="0.01" required>
                     </div>
                     <div class="input-group">
+                        <label>ราคาต้นทุน/หน่วย (฿):</label>
+                        <input type="number" name="cost_price" step="0.01" value="0.00" required>
+                    </div>
+                    <div class="input-group">
                         <label>จำนวนสต็อกเริ่มต้น:</label>
                         <input type="number" name="stock_qty" value="0">
                     </div>
@@ -450,6 +477,10 @@ if ($chk && $chk->num_rows == 0) {
                     <div class="input-group">
                         <label>ราคาขาย (฿):</label>
                         <input type="number" name="price" id="edit_price" step="0.01" required>
+                    </div>
+                    <div class="input-group">
+                        <label>ราคาต้นทุน/หน่วย (฿):</label>
+                        <input type="number" name="cost_price" id="edit_cost_price" step="0.01" required>
                     </div>
                     <div class="input-group">
                         <label>แก้ไขยอดคงเหลือ (อัปเดตทับยอดเดิม):</label>
